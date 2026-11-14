@@ -1,0 +1,9 @@
+[package]
+name = "application-core"
+description = "AI Beauty Studio core: owns files and documents, schedules engine work"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+engine-sys = { path = "../engine-sys" }

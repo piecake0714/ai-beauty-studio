@@ -6,3 +6,8 @@ vcpkg_installed/
 *.log
 .DS_Store
 models/weights/
+engine/dist/
+ci-logs/
+ci-out/
+.vcpkg-cache/
+apps/desktop/src-tauri/gen/

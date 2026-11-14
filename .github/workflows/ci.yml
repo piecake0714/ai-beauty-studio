@@ -1,0 +1,154 @@
+name: CI
+
+on:
+  push:
+    branches-ignore:
+      - ci-logs
+  workflow_dispatch:
+
+# The last step publishes build logs to the `ci-logs` branch.
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows build and test
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Prepare folders
+        run: mkdir -p ci-logs .vcpkg-cache
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: .vcpkg-cache
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('engine/vcpkg.json') }}
+          restore-keys: vcpkg-${{ runner.os }}-
+
+      - name: Record tool versions
+        id: versions
+        run: |
+          {
+            echo "cmake:  $(cmake --version | head -n 1)"
+            echo "rustc:  $(rustc --version)"
+            echo "cargo:  $(cargo --version)"
+            echo "node:   $(node --version)"
+            echo "npm:    $(npm --version)"
+            echo "vcpkg:  $(git -C "$VCPKG_INSTALLATION_ROOT" rev-parse HEAD)"
+          } 2>&1 | tee ci-logs/0-versions.txt
+
+      - name: Build C++ engine
+        id: engine_build
+        run: |
+          set -o pipefail
+          VCPKG="$(cygpath -m "$VCPKG_INSTALLATION_ROOT")"
+          ROOT="$(cygpath -m "$PWD")"
+          {
+            cmake -S engine -B build/engine \
+              -DCMAKE_TOOLCHAIN_FILE="$VCPKG/scripts/buildsystems/vcpkg.cmake" \
+              -DVCPKG_TARGET_TRIPLET=x64-windows-static-md \
+              -DCMAKE_INSTALL_PREFIX="$ROOT/engine/dist" &&
+            cmake --build build/engine --config Release &&
+            cmake --install build/engine --config Release
+          } 2>&1 | tee ci-logs/1-engine-build.txt
+
+      - name: Test C++ engine
+        id: engine_test
+        run: |
+          set -o pipefail
+          ctest --test-dir build/engine -C Release --output-on-failure 2>&1 | tee ci-logs/2-engine-test.txt
+
+      - name: Install frontend dependencies
+        id: npm_install
+        working-directory: apps/desktop
+        run: |
+          set -o pipefail
+          npm install 2>&1 | tee ../../ci-logs/3-npm-install.txt
+
+      - name: Test frontend
+        id: frontend_test
+        working-directory: apps/desktop
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee ../../ci-logs/4-frontend-test.txt
+
+      - name: Build frontend
+        id: frontend_build
+        working-directory: apps/desktop
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee ../../ci-logs/5-frontend-build.txt
+
+      - name: Test Rust workspace
+        id: rust_test
+        run: |
+          set -o pipefail
+          cargo test --workspace 2>&1 | tee ci-logs/6-rust-test.txt
+
+      - name: Build installer
+        id: installer
+        working-directory: apps/desktop
+        run: |
+          set -o pipefail
+          npx tauri build 2>&1 | tee ../../ci-logs/7-installer.txt
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-beauty-studio-windows-installer
+          path: target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+      # Publishes a trimmed copy of each step's log, plus the generated
+      # lockfiles, to the `ci-logs` branch so build results can be read
+      # without opening the Actions page.
+      - name: Publish logs
+        if: always()
+        run: |
+          mkdir -p ci-out/logs
+          for f in ci-logs/*.txt; do
+            [ -f "$f" ] && tail -n 400 "$f" > "ci-out/logs/$(basename "$f")"
+          done
+          cp build/engine/vcpkg-manifest-install.log ci-out/logs/ 2>/dev/null || true
+          cp Cargo.lock ci-out/ 2>/dev/null || true
+          cp apps/desktop/package-lock.json ci-out/ 2>/dev/null || true
+          ls -la target/release/bundle/nsis 2>/dev/null > ci-out/installer-files.txt || true
+          {
+            echo "commit: $GITHUB_SHA"
+            echo "branch: $GITHUB_REF_NAME"
+            echo "run:    $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "job:    ${{ job.status }}"
+            echo "engine_build:   ${{ steps.engine_build.outcome }}"
+            echo "engine_test:    ${{ steps.engine_test.outcome }}"
+            echo "npm_install:    ${{ steps.npm_install.outcome }}"
+            echo "frontend_test:  ${{ steps.frontend_test.outcome }}"
+            echo "frontend_build: ${{ steps.frontend_build.outcome }}"
+            echo "rust_test:      ${{ steps.rust_test.outcome }}"
+            echo "installer:      ${{ steps.installer.outcome }}"
+          } > ci-out/RUN.txt
+          cd ci-out
+          git init -q -b ci-logs
+          git add -A
+          git -c user.name="github-actions" -c user.email="github-actions@users.noreply.github.com" \
+            commit -q -m "CI logs for $GITHUB_SHA"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" ci-logs

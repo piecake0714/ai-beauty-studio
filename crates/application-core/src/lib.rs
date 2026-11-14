@@ -1,0 +1,169 @@
+//! Application core.
+//!
+//! The core does all file I/O (so Unicode paths work on Windows) and hands
+//! byte buffers to the engine. Original files are opened read-only and are
+//! never written.
+
+use std::fmt;
+use std::fs;
+use std::io;
+use std::path::Path;
+
+pub use engine_sys::RgbaImage;
+use engine_sys::EngineError;
+
+/// Why an image could not be opened. `code()` is the stable identifier the
+/// UI maps to a localized message.
+#[derive(Debug)]
+pub enum OpenError {
+    NotFound,
+    ReadFailed(io::Error),
+    NotAnImage,
+    OutOfMemory,
+    Internal,
+}
+
+impl OpenError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            OpenError::NotFound => "not_found",
+            OpenError::ReadFailed(_) => "read_failed",
+            OpenError::NotAnImage => "not_an_image",
+            OpenError::OutOfMemory => "out_of_memory",
+            OpenError::Internal => "internal",
+        }
+    }
+}
+
+impl fmt::Display for OpenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OpenError::NotFound => f.write_str("the file does not exist"),
+            OpenError::ReadFailed(e) => write!(f, "the file could not be read: {e}"),
+            OpenError::NotAnImage => f.write_str("the file is damaged or not a supported image"),
+            OpenError::OutOfMemory => f.write_str("not enough memory to open the image"),
+            OpenError::Internal => f.write_str("internal error while opening the image"),
+        }
+    }
+}
+
+impl std::error::Error for OpenError {}
+
+/// Read an image file and decode it for display.
+///
+/// `max_dimension` limits the longer side of the returned pixels (zero keeps
+/// the full size). The file is only read.
+pub fn open_image(path: &Path, max_dimension: u32) -> Result<RgbaImage, OpenError> {
+    let bytes = fs::read(path).map_err(|e| match e.kind() {
+        io::ErrorKind::NotFound => OpenError::NotFound,
+        _ => OpenError::ReadFailed(e),
+    })?;
+    if bytes.is_empty() {
+        return Err(OpenError::NotAnImage);
+    }
+    engine_sys::decode_rgba8(&bytes, max_dimension).map_err(|e| match e {
+        EngineError::DecodeFailed => OpenError::NotAnImage,
+        EngineError::OutOfMemory => OpenError::OutOfMemory,
+        EngineError::InvalidArgument | EngineError::Internal => OpenError::Internal,
+    })
+}
+
+/// Size of the header written by [`encode_frame`].
+pub const FRAME_HEADER_LEN: usize = 16;
+
+/// Serialize an image for transfer to the UI: four little-endian `u32`
+/// (width, height, source width, source height) followed by RGBA8 pixels.
+pub fn encode_frame(image: &RgbaImage) -> Vec<u8> {
+    let mut frame = Vec::with_capacity(FRAME_HEADER_LEN + image.pixels.len());
+    for value in [image.width, image.height, image.source_width, image.source_height] {
+        frame.extend_from_slice(&value.to_le_bytes());
+    }
+    frame.extend_from_slice(&image.pixels);
+    frame
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures")
+            .join(name)
+    }
+
+    /// A fresh directory under the system temp dir, removed on drop.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("aibs-test-{}-{name}", std::process::id()));
+            fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn opens_png_and_jpeg() {
+        for name in ["gradient_64x48.png", "gradient_64x48.jpg"] {
+            let image = open_image(&fixture(name), 0).unwrap();
+            assert_eq!((image.width, image.height), (64, 48), "{name}");
+        }
+    }
+
+    #[test]
+    fn opens_image_from_a_chinese_path() {
+        let dir = TempDir::new("中文資料夾");
+        let path = dir.0.join("測試圖片 一.png");
+        fs::copy(fixture("gradient_64x48.png"), &path).unwrap();
+        let image = open_image(&path, 0).unwrap();
+        assert_eq!((image.width, image.height), (64, 48));
+    }
+
+    #[test]
+    fn corrupted_file_gives_a_clear_error() {
+        let err = open_image(&fixture("corrupted.jpg"), 0).unwrap_err();
+        assert_eq!(err.code(), "not_an_image");
+    }
+
+    #[test]
+    fn empty_file_gives_a_clear_error() {
+        let dir = TempDir::new("empty");
+        let path = dir.0.join("empty.jpg");
+        fs::write(&path, b"").unwrap();
+        assert_eq!(open_image(&path, 0).unwrap_err().code(), "not_an_image");
+    }
+
+    #[test]
+    fn missing_file_gives_not_found() {
+        let err = open_image(&fixture("does-not-exist.png"), 0).unwrap_err();
+        assert_eq!(err.code(), "not_found");
+    }
+
+    #[test]
+    fn opening_never_modifies_the_original() {
+        let path = fixture("gradient_64x48.jpg");
+        let before = fs::read(&path).unwrap();
+        open_image(&path, 16).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn frame_has_header_then_pixels() {
+        let image = open_image(&fixture("gradient_64x48.png"), 32).unwrap();
+        let frame = encode_frame(&image);
+        assert_eq!(frame.len(), FRAME_HEADER_LEN + 32 * 24 * 4);
+        assert_eq!(&frame[0..4], &32u32.to_le_bytes());
+        assert_eq!(&frame[4..8], &24u32.to_le_bytes());
+        assert_eq!(&frame[8..12], &64u32.to_le_bytes());
+        assert_eq!(&frame[12..16], &48u32.to_le_bytes());
+        assert_eq!(&frame[16..], &image.pixels[..]);
+    }
+}
