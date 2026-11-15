@@ -1,6 +1,21 @@
 import { useState } from "react";
 import { LayersSection } from "./LayersSection";
-import { BANDS, BEGINNER, COLOUR, LIGHTING, fromHex, hasHiddenInBeginner, isIdentity, LIGHT, PORTRAIT, toHex, withBand, withScalar } from "../adjustments";
+import {
+  BANDS,
+  BEGINNER,
+  COLOUR,
+  LIGHTING,
+  fromHex,
+  hasHiddenInBeginner,
+  isIdentity,
+  LIGHT,
+  MAX_HEAL_SIZE,
+  MIN_HEAL_SIZE,
+  PORTRAIT,
+  toHex,
+  withBand,
+  withScalar,
+} from "../adjustments";
 import { useApp, useAppStore, useI18n } from "../context";
 import { errorMessage, type MessageKey } from "../i18n";
 import { HSL_BANDS, type BackgroundMode, type BandAdjustment, type LightKind, type ScalarAdjustment } from "../types";
@@ -23,6 +38,11 @@ const RANGE: Record<ScalarAdjustment, { min: number; max: number; step: number; 
   vibrance: { min: -100, max: 100, step: 1, format: signed(0) },
   saturation: { min: -100, max: 100, step: 1, format: signed(0) },
   skinSmoothing: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
+  blemishRemoval: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
+  darkCircles: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
+  eyeEnhance: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
+  teethWhitening: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
+  backgroundDetail: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
   backgroundBlur: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
   backgroundBrightness: { min: -100, max: 100, step: 1, format: signed(0) },
   backgroundSaturation: { min: -100, max: 100, step: 1, format: signed(0) },
@@ -222,6 +242,55 @@ function ShapeStatus() {
   }
 }
 
+/** Healing brush: click a spot on the photo to replace it with matching
+ * texture from nearby. */
+function HealTool() {
+  const { t } = useI18n();
+  const active = useApp((s) => s.tool === "heal");
+  const healSize = useApp((s) => s.healSize);
+  const count = useApp((s) => s.live.spots.length);
+  const setTool = useApp((s) => s.setTool);
+  const setHealSize = useApp((s) => s.setHealSize);
+  const clearSpots = useApp((s) => s.clearSpots);
+  return (
+    <div className="heal-tool">
+      <div className="button-row">
+        <button
+          type="button"
+          className={active ? "ghost small pressed" : "ghost small"}
+          aria-pressed={active}
+          onClick={() => setTool(active ? "none" : "heal")}
+        >
+          {t("heal.tool")}
+        </button>
+        <button type="button" className="ghost small" disabled={count === 0} onClick={() => void clearSpots()}>
+          {t("heal.clear", { count })}
+        </button>
+      </div>
+      {active && (
+        <>
+          <p className="note">{t("heal.hint")}</p>
+          <div className="slider-row">
+            <div className="slider-label">
+              <label htmlFor="heal-size">{t("heal.size")}</label>
+              <output htmlFor="heal-size">{(healSize * 100).toFixed(1)}%</output>
+            </div>
+            <input
+              id="heal-size"
+              type="range"
+              min={MIN_HEAL_SIZE * 100}
+              max={MAX_HEAL_SIZE * 100}
+              step={0.1}
+              value={healSize * 100}
+              onChange={(event) => setHealSize(Number(event.target.value) / 100)}
+            />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function AdjustPanel() {
   const { t } = useI18n();
   const chooseLight = useApp((s) => s.chooseLight);
@@ -302,6 +371,7 @@ export function AdjustPanel() {
         <h2 id="portrait-title">{t("adjust.portrait")}</h2>
         <FaceNote />
         {visible(PORTRAIT).map(scalar)}
+        <HealTool />
       </section>
 
       <section aria-labelledby="background-title">
@@ -362,6 +432,7 @@ export function AdjustPanel() {
             )}
             {live.backgroundMode === "transparent" && <p className="note">{t("background.transparentNote")}</p>}
             {live.backgroundMode !== "original" && scalar("backgroundEdge")}
+            {live.backgroundMode !== "original" && scalar("backgroundDetail")}
             {live.backgroundMode === "blur" && scalar("backgroundBlur")}
             {live.backgroundMode !== "transparent" && live.backgroundMode !== "color" && (
               <>

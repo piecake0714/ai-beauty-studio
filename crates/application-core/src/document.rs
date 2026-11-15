@@ -40,6 +40,33 @@ pub enum LightSetting {
 /// Pixel tolerance when a crop edge is turned into whole pixels.
 const CROP_SNAP: f64 = 0.01;
 
+/// Most healing spots a document may have.
+pub const MAX_SPOTS: usize = engine_sys::MAX_SPOTS;
+/// Largest healing spot radius, in source pixels.
+pub const MAX_SPOT_RADIUS: f32 = 2000.0;
+
+/// A healing spot: the round area of `radius` source pixels around (x, y)
+/// is replaced by matching texture from nearby.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HealSpot {
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+}
+
+impl HealSpot {
+    /// None for a spot that cannot be used (not a number, no size).
+    pub fn clamped(&self) -> Option<HealSpot> {
+        let usable = self.x.is_finite() && self.y.is_finite() && self.radius.is_finite() && self.radius > 0.0;
+        usable.then(|| HealSpot { x: self.x, y: self.y, radius: self.radius.clamp(1.0, MAX_SPOT_RADIUS) })
+    }
+
+    pub fn to_engine(self) -> engine_sys::Spot {
+        engine_sys::Spot { x: self.x, y: self.y, radius: self.radius }
+    }
+}
+
 /// Most layers a document may have.
 pub const MAX_LAYERS: usize = 16;
 /// Most strokes on one layer mask.
@@ -353,6 +380,13 @@ pub struct Adjustments {
     pub hsl_saturation: [f32; HSL_BANDS],
     pub hsl_luminance: [f32; HSL_BANDS],
     pub skin_smoothing: f32,
+    /// Portrait tools, 0 to 100 each (need detected faces).
+    pub blemish_removal: f32,
+    pub dark_circles: f32,
+    pub eye_enhance: f32,
+    pub teeth_whitening: f32,
+    /// Healing spots, in source pixels (at most [`MAX_SPOTS`]).
+    pub spots: Vec<HealSpot>,
     pub background_mode: BackgroundSetting,
     /// R, G, B for [`BackgroundSetting::Color`].
     pub background_color: [u8; 3],
@@ -363,6 +397,8 @@ pub struct Adjustments {
     pub background_image: u32,
     /// -100 (pull the subject's edge in) .. 100 (push it out).
     pub background_edge: f32,
+    /// 0 to 100: the subject's edge follows fine detail such as hair.
+    pub background_detail: f32,
     pub light_kind: LightSetting,
     /// Light position as a fraction of the width and height (may lie a
     /// little outside the photo).
@@ -411,6 +447,11 @@ impl Adjustments {
             hsl_saturation: self.hsl_saturation.map(|v| fix(v, 100.0)),
             hsl_luminance: self.hsl_luminance.map(|v| fix(v, 100.0)),
             skin_smoothing: fix(self.skin_smoothing, 100.0).max(0.0),
+            blemish_removal: fix(self.blemish_removal, 100.0).max(0.0),
+            dark_circles: fix(self.dark_circles, 100.0).max(0.0),
+            eye_enhance: fix(self.eye_enhance, 100.0).max(0.0),
+            teeth_whitening: fix(self.teeth_whitening, 100.0).max(0.0),
+            spots: self.spots.iter().filter_map(HealSpot::clamped).take(MAX_SPOTS).collect(),
             background_mode: self.background_mode,
             background_color: self.background_color,
             background_blur: fix(self.background_blur, 100.0).max(0.0),
@@ -418,6 +459,7 @@ impl Adjustments {
             background_saturation: fix(self.background_saturation, 100.0),
             background_image: self.background_image,
             background_edge: fix(self.background_edge, 100.0),
+            background_detail: fix(self.background_detail, 100.0).max(0.0),
             light_kind: self.light_kind,
             light_x: fix(self.light_x, 2.0).max(-1.0),
             light_y: fix(self.light_y, 2.0).max(-1.0),
@@ -457,6 +499,24 @@ impl Adjustments {
         }
     }
 
+    /// The healing spots for the engine (from clamped values).
+    pub fn engine_spots(&self) -> Vec<engine_sys::Spot> {
+        self.spots.iter().map(|s| s.to_engine()).collect()
+    }
+
+    /// Portrait retouching for the engine, from clamped values.
+    pub fn portrait<'a>(&self, faces: &'a [engine_sys::Face], spots: &'a [engine_sys::Spot]) -> engine_sys::Portrait<'a> {
+        engine_sys::Portrait {
+            faces,
+            smoothing: self.skin_smoothing,
+            blemishes: self.blemish_removal,
+            dark_circles: self.dark_circles,
+            eyes: self.eye_enhance,
+            teeth: self.teeth_whitening,
+            spots,
+        }
+    }
+
     pub fn is_identity(&self) -> bool {
         *self == Adjustments::default()
     }
@@ -488,6 +548,7 @@ impl Adjustments {
             brightness: a.background_brightness,
             saturation: a.background_saturation,
             edge: a.background_edge,
+            detail: a.background_detail,
             image: if mode == Mode::Image { image } else { None },
         })
     }
@@ -785,6 +846,40 @@ mod tests {
         assert_eq!(adjustments["hslHue"].as_array().unwrap().len(), 8);
         assert_eq!(json["canUndo"], false);
         assert_eq!(json["edited"], false);
+    }
+
+    #[test]
+    fn portrait_tools_and_spots_are_kept_in_range() {
+        let a = Adjustments {
+            blemish_removal: 300.0,
+            dark_circles: -4.0,
+            eye_enhance: f32::NAN,
+            teeth_whitening: 55.0,
+            background_detail: 140.0,
+            spots: vec![
+                HealSpot { x: 10.0, y: 20.0, radius: 5.0 },
+                HealSpot { x: f32::NAN, y: 1.0, radius: 3.0 },
+                HealSpot { x: 1.0, y: 1.0, radius: 0.0 },
+                HealSpot { x: 1.0, y: 1.0, radius: 1e9 },
+            ],
+            ..Default::default()
+        }
+        .clamped();
+        assert_eq!((a.blemish_removal, a.dark_circles, a.eye_enhance, a.teeth_whitening), (100.0, 0.0, 0.0, 55.0));
+        assert_eq!(a.background_detail, 100.0);
+        assert_eq!(a.spots, vec![HealSpot { x: 10.0, y: 20.0, radius: 5.0 }, HealSpot { x: 1.0, y: 1.0, radius: MAX_SPOT_RADIUS }]);
+        let many = Adjustments { spots: vec![HealSpot { x: 1.0, y: 1.0, radius: 2.0 }; MAX_SPOTS + 7], ..Default::default() };
+        assert_eq!(many.clamped().spots.len(), MAX_SPOTS);
+        let spots = a.engine_spots();
+        let portrait = a.portrait(&[], &spots);
+        assert_eq!((portrait.blemishes, portrait.teeth, portrait.spots.len()), (100.0, 55.0, 2));
+        // Older saved data without these fields loads with them off.
+        let old: Adjustments = serde_json::from_str(r#"{"skinSmoothing":30}"#).unwrap();
+        assert!(old.spots.is_empty() && old.blemish_removal == 0.0 && old.background_detail == 0.0);
+        let json = serde_json::to_value(&a).unwrap();
+        for key in ["blemishRemoval", "darkCircles", "eyeEnhance", "teethWhitening", "backgroundDetail", "spots"] {
+            assert!(json.get(key).is_some(), "missing {key}");
+        }
     }
 
     #[test]

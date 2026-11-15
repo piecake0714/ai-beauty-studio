@@ -353,6 +353,187 @@ void test_auto_adjust() {
     CHECK(aibs_auto_adjust(nullptr, nullptr, 0, &with_face) == AIBS_ERR_INVALID_ARGUMENT);
 }
 
+
+// ---- 1.3 portrait tools -----------------------------------------------
+
+bool render_full(const Source& source, const cv::Mat& bgr, const aibs_portrait* portrait, Image& out) {
+    return aibs_source_render(source.ptr, 0, 0, bgr.cols, bgr.rows, bgr.cols, bgr.rows, portrait, nullptr, nullptr,
+                              nullptr, nullptr, 0, 0, &out.img) == AIBS_OK &&
+           out.img.data != nullptr;
+}
+
+// Mean of channel `c` of the YCrCb version of the render over a box.
+double mean_ycc(const Image& image, int x0, int y0, int x1, int y1, int c) {
+    double sum = 0, n = 0;
+    for (int y = y0; y < y1; ++y) {
+        for (int x = x0; x < x1; ++x) {
+            const uint8_t* p = image.px(x, y);
+            cv::Mat one(1, 1, CV_8UC3, cv::Scalar(p[2], p[1], p[0])), ycc;
+            cv::cvtColor(one, ycc, cv::COLOR_BGR2YCrCb);
+            sum += ycc.at<cv::Vec3b>(0, 0)[c];
+            n += 1;
+        }
+    }
+    return sum / n;
+}
+
+bool same_outside(const Image& a, const Image& b, const std::vector<cv::Rect>& allowed) {
+    for (int y = 0; y < static_cast<int>(a.img.height); ++y) {
+        for (int x = 0; x < static_cast<int>(a.img.width); ++x) {
+            bool inside = false;
+            for (const cv::Rect& r : allowed) inside = inside || r.contains(cv::Point(x, y));
+            if (!inside && std::memcmp(a.px(x, y), b.px(x, y), 4) != 0) return false;
+        }
+    }
+    return true;
+}
+
+void test_face_tools() {
+    TestFace t = make_test_face();
+    // Darker, purplish shadows under both eyes (eye at y 180, face 250 high:
+    // the area is centred about 27 px lower).
+    for (const int ex : {160, 240}) {
+        cv::ellipse(t.bgr, cv::Point(ex, 207), cv::Size(22, 9), 0, 0, 360, cv::Scalar(130, 120, 150), cv::FILLED);
+    }
+    // Yellowish teeth in the middle of the (red) mouth.
+    cv::rectangle(t.bgr, cv::Rect(184, 281, 32, 6), cv::Scalar(150, 205, 210), cv::FILLED);
+    // A blemish on the cheek.
+    cv::circle(t.bgr, cv::Point(135, 240), 3, cv::Scalar(100, 115, 160), cv::FILLED);
+    Source source;
+    CHECK(open_mat(t.bgr, source));
+    CHECK(aibs_measure_skin(source.ptr, &t.face) == AIBS_OK);
+
+    Image original;
+    CHECK(render_full(source, t.bgr, nullptr, original));
+    if (!original.img.data) return;
+    const std::vector<cv::Rect> face_area = {cv::Rect(80, 60, 240, 300)};
+
+    // All off: exactly the original.
+    {
+        aibs_portrait off{&t.face, 1, 0.0f};
+        Image out;
+        CHECK(render_full(source, t.bgr, &off, out));
+        CHECK(out.img.data && std::memcmp(out.img.data, original.img.data, t.bgr.total() * 4) == 0);
+    }
+    // Dark circles: the shadow lifts; nothing outside the face changes.
+    {
+        aibs_portrait p{&t.face, 1, 0.0f};
+        p.dark_circles = 100.0f;
+        Image out;
+        CHECK(render_full(source, t.bgr, &p, out));
+        if (out.img.data) {
+            const double before = mean_ycc(original, 150, 204, 170, 210, 0);
+            const double after = mean_ycc(out, 150, 204, 170, 210, 0);
+            std::printf("info: under-eye brightness %.1f -> %.1f\n", before, after);
+            CHECK(after > before + 8);
+            CHECK(same_outside(original, out, face_area));
+            // The forehead is not part of it.
+            CHECK(std::memcmp(original.px(200, 120), out.px(200, 120), 4) == 0);
+        }
+    }
+    // Eyes: more contrast around the eye, the cheek unchanged.
+    {
+        aibs_portrait p{&t.face, 1, 0.0f};
+        p.eyes = 100.0f;
+        Image out;
+        CHECK(render_full(source, t.bgr, &p, out));
+        if (out.img.data) {
+            const double before = stddev_of(original, 140, 168, 180, 192, 1);
+            const double after = stddev_of(out, 140, 168, 180, 192, 1);
+            std::printf("info: eye contrast %.1f -> %.1f\n", before, after);
+            CHECK(after > before * 1.05);
+            CHECK(std::memcmp(original.px(130, 250), out.px(130, 250), 4) == 0);
+            CHECK(same_outside(original, out, face_area));
+        }
+    }
+    // Teeth: less yellow (Cb up) and brighter; the lips barely change.
+    {
+        aibs_portrait p{&t.face, 1, 0.0f};
+        p.teeth = 100.0f;
+        Image out;
+        CHECK(render_full(source, t.bgr, &p, out));
+        if (out.img.data) {
+            const double cb_before = mean_ycc(original, 190, 282, 210, 286, 2);
+            const double cb_after = mean_ycc(out, 190, 282, 210, 286, 2);
+            const double y_before = mean_ycc(original, 190, 282, 210, 286, 0);
+            const double y_after = mean_ycc(out, 190, 282, 210, 286, 0);
+            std::printf("info: teeth Cb %.1f -> %.1f, Y %.1f -> %.1f\n", cb_before, cb_after, y_before, y_after);
+            CHECK(cb_after > cb_before + 5);
+            CHECK(y_after > y_before + 3);
+            for (const cv::Point lip : {cv::Point(200, 292), cv::Point(176, 285)}) {
+                const uint8_t* a = original.px(lip.x, lip.y);
+                const uint8_t* b = out.px(lip.x, lip.y);
+                for (int c = 0; c < 3; ++c) CHECK(std::abs(a[c] - b[c]) <= 3);
+            }
+            CHECK(same_outside(original, out, face_area));
+        }
+    }
+    // Blemishes: the dark dot fades into the skin around it.
+    {
+        aibs_portrait p{&t.face, 1, 0.0f};
+        p.blemishes = 100.0f;
+        Image out;
+        CHECK(render_full(source, t.bgr, &p, out));
+        if (out.img.data) {
+            const double skin = mean_ycc(original, 145, 230, 155, 250, 0);
+            const double dot_before = mean_ycc(original, 134, 239, 137, 242, 0);
+            const double dot_after = mean_ycc(out, 134, 239, 137, 242, 0);
+            std::printf("info: blemish %.1f -> %.1f (skin %.1f)\n", dot_before, dot_after, skin);
+            CHECK(skin - dot_after < 0.5 * (skin - dot_before));
+            CHECK(same_outside(original, out, face_area));
+            // The eyes are not blemishes.
+            CHECK(std::memcmp(original.px(160, 180), out.px(160, 180), 4) == 0);
+        }
+    }
+}
+
+void test_healing_spots() {
+    // Grey with grain, and a dark spot at (100, 100).
+    cv::Mat bgr(200, 220, CV_8UC3);
+    for (int y = 0; y < bgr.rows; ++y)
+        for (int x = 0; x < bgr.cols; ++x) {
+            const uint8_t v = cv::saturate_cast<uint8_t>(128 + 10 * noise(x, y, 5));
+            bgr.at<cv::Vec3b>(y, x) = cv::Vec3b(v, v, static_cast<uint8_t>(v + 10));
+        }
+    cv::circle(bgr, cv::Point(100, 100), 6, cv::Scalar(40, 40, 40), cv::FILLED);
+    Source source;
+    CHECK(open_mat(bgr, source));
+    const aibs_spot spot{100.5f, 100.5f, 9.0f};
+    aibs_portrait p{nullptr, 0, 0.0f};
+    p.spots = &spot;
+    p.spot_count = 1;
+    Image original, healed;
+    CHECK(render_full(source, bgr, nullptr, original));
+    CHECK(render_full(source, bgr, &p, healed));
+    if (!original.img.data || !healed.img.data) return;
+    const uint8_t* centre = healed.px(100, 100);
+    std::printf("info: healed spot centre %d (was %d)\n", centre[1], original.px(100, 100)[1]);
+    CHECK(std::abs(centre[1] - 128) < 25);
+    CHECK(std::abs(centre[0] - centre[1] - 10) < 8);  // the colour of the area around (red +10)
+    // Only inside the spot's radius.
+    CHECK(same_outside(original, healed, {cv::Rect(91, 91, 19, 19)}));
+    // A spot at the photo's corner takes texture from inside the photo and
+    // changes nothing beyond its radius.
+    const aibs_spot corner{2.0f, 2.0f, 9.0f};
+    p.spots = &corner;
+    Image cornered;
+    CHECK(render_full(source, bgr, &p, cornered));
+    CHECK(cornered.img.data && same_outside(original, cornered, {cv::Rect(0, 0, 12, 12)}));
+
+    // A part rendered on its own matches the same part of the whole render
+    // (as when exporting in strips or viewing part of the photo).
+    p.spots = &spot;
+    Image part;
+    CHECK(aibs_source_render(source.ptr, 95, 70, 60, 60, 60, 60, &p, nullptr, nullptr, nullptr, nullptr, 0, 0, &part.img) ==
+          AIBS_OK);
+    if (part.img.data) {
+        bool same = true;
+        for (int y = 0; y < 60; ++y)
+            for (int x = 0; x < 60; ++x) same = same && std::memcmp(part.px(x, y), healed.px(95 + x, 70 + y), 4) == 0;
+        CHECK(same);
+    }
+}
+
 }  // namespace
 
 void run_portrait_tests() {
@@ -361,4 +542,6 @@ void run_portrait_tests() {
     test_skin_smoothing();
     test_detection_without_faces();
     test_auto_adjust();
+    test_face_tools();
+    test_healing_spots();
 }

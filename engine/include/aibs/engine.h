@@ -110,11 +110,32 @@ typedef struct aibs_face {
     float skin[5];
 } aibs_face;
 
-/* Portrait retouching applied while rendering. */
+/* A healing spot: the round area around (x, y), radius source pixels
+ * across half, is replaced by matching texture from nearby. */
+typedef struct aibs_spot {
+    float x, y, radius;
+} aibs_spot;
+
+/* Most healing spots in one render. */
+#define AIBS_MAX_SPOTS 500
+
+/*
+ * Portrait retouching applied while rendering, before the colour
+ * adjustments. Only colours change: nothing in the photo moves. The face
+ * tools need detected faces (with measured skin for smoothing and
+ * blemishes); healing spots work anywhere. Healing first, then for each
+ * face: blemishes, smoothing, dark circles, eyes, teeth.
+ */
 typedef struct aibs_portrait {
     const aibs_face* faces;
     uint32_t face_count;
     float smoothing;      /* 0 (off) to 100 */
+    float blemishes;      /* 0..100: small dark or red spots on the skin fade */
+    float dark_circles;   /* 0..100: shadows under the eyes lift */
+    float eyes;           /* 0..100: eyes brighter and clearer */
+    float teeth;          /* 0..100: teeth whiter (less yellow, brighter) */
+    const aibs_spot* spots;
+    uint32_t spot_count;  /* at most AIBS_MAX_SPOTS are used */
 } aibs_portrait;
 
 /* A decoded image; see aibs_source_open below. */
@@ -144,6 +165,7 @@ typedef struct aibs_background {
     float saturation;          /* -100..100, background only */
     float edge;                /* -100 (pull the edge in) .. 100 (push it out) */
     const aibs_source* image;  /* for AIBS_BG_IMAGE */
+    float detail;              /* 0..100: edge follows fine detail such as hair more closely */
 } aibs_background;
 
 /*

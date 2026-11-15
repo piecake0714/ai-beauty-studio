@@ -52,8 +52,10 @@ double away_from(double d) {
 
 void retouch_faces(cv::Mat& bgr, int first_col, double x, double y, double scale_x, double scale_y,
                    const aibs_portrait& portrait) {
-    const double strength = std::clamp(static_cast<double>(portrait.smoothing), 0.0, 100.0) / 100.0;
-    if (!(strength > 0.0) || portrait.faces == nullptr || portrait.face_count == 0 || first_col >= bgr.cols) {
+    const auto level = [](float v) { return std::isfinite(v) ? std::clamp(static_cast<double>(v), 0.0, 100.0) / 100.0 : 0.0; };
+    const double strength = level(portrait.smoothing);
+    const double blemish = level(portrait.blemishes);
+    if ((!(strength > 0.0) && !(blemish > 0.0)) || portrait.faces == nullptr || portrait.face_count == 0 || first_col >= bgr.cols) {
         return;
     }
     first_col = std::max(first_col, 0);
@@ -129,15 +131,20 @@ void retouch_faces(cv::Mat& bgr, int first_col, double x, double y, double scale
         }
         mask = box(box(mask, mask_radius), mask_radius);
 
-        // Smooth, then add the finest texture back.
-        const cv::Mat smooth = guided(image, radius, 0.08 * 0.08);
-        const cv::Mat fine = image - box(image, fine_radius);
-        const cv::Mat retouched = smooth + fine * 0.6;
+        // Blemishes first, so smoothing does not spread them.
+        reduce_blemishes(image, ycrcb, mask, face_px, blemish);
 
-        cv::Mat weight;
-        cv::Mat channels[3] = {mask * strength, mask * strength, mask * strength};
-        cv::merge(channels, 3, weight);
-        const cv::Mat result = image + weight.mul(retouched - image);
+        // Smooth, then add the finest texture back.
+        cv::Mat result = image;
+        if (strength > 0.0) {
+            const cv::Mat smooth = guided(image, radius, 0.08 * 0.08);
+            const cv::Mat fine = image - box(image, fine_radius);
+            const cv::Mat retouched = smooth + fine * 0.6;
+            cv::Mat weight;
+            cv::Mat channels[3] = {mask * strength, mask * strength, mask * strength};
+            cv::merge(channels, 3, weight);
+            result = image + weight.mul(retouched - image);
+        }
 
         cv::Mat result8;
         result.convertTo(result8, CV_8UC3, 255.0);

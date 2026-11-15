@@ -6,6 +6,9 @@ import {
   MAX_LAYERS,
   MAX_STROKES,
   MAX_STROKE_VALUES,
+  MAX_SPOTS,
+  MIN_HEAL_SIZE,
+  MAX_HEAL_SIZE,
   withBackground,
   withLayer,
   withLayerMoved,
@@ -45,7 +48,7 @@ import {
 export type View = "home" | "editor";
 
 /** What a pointer drag on the picture does. */
-export type Tool = "none" | "brush" | "eraser" | "crop";
+export type Tool = "none" | "brush" | "eraser" | "crop" | "heal";
 
 /** Brush settings (not part of the document). */
 export interface BrushSettings {
@@ -177,6 +180,8 @@ export interface AppState {
   selectedLayer: number | null;
   /** The stroke being painted. */
   painting: boolean;
+  /** Healing brush diameter as a fraction of the photo's longer side. */
+  healSize: number;
 
   init(): Promise<void>;
   /** Open an image. With `discard`, asks first when adjustments would be lost. */
@@ -265,6 +270,11 @@ export interface AppState {
   beginStroke(x: number, y: number): void;
   extendStroke(x: number, y: number): void;
   endStroke(): Promise<void>;
+  setHealSize(size: number): void;
+  /** Add a healing spot at a source pixel (one undoable step). */
+  addSpot(x: number, y: number): Promise<void>;
+  /** Remove every healing spot (one undoable step). */
+  clearSpots(): Promise<void>;
   /** Start cropping: the whole photo is shown with the crop frame. */
   startCrop(): void;
   setCropLive(crop: Crop): void;
@@ -732,6 +742,28 @@ export function createAppStore(api: Api) {
         if (!get().painting) return;
         set({ painting: false });
         await get().commitLive();
+      },
+
+      healSize: 0.015,
+
+      setHealSize: (size) => set({ healSize: Math.min(Math.max(size, MIN_HEAL_SIZE), MAX_HEAL_SIZE) }),
+
+      async addSpot(x, y) {
+        const { document, live, healSize } = get();
+        if (!document || live.spots.length >= MAX_SPOTS) return;
+        const { width, height } = document.size;
+        if (!(x >= 0 && y >= 0 && x < width && y < height)) return;
+        const radius = Math.max(1, (healSize * Math.max(width, height)) / 2);
+        const next = { ...live, spots: [...live.spots, { x, y, radius }] };
+        set({ live: next });
+        await adoptEdit(() => api.commitAdjustments(next));
+      },
+
+      async clearSpots() {
+        if (!get().document || get().live.spots.length === 0) return;
+        const next = { ...get().live, spots: [] };
+        set({ live: next });
+        await adoptEdit(() => api.commitAdjustments(next));
       },
 
       startCrop() {

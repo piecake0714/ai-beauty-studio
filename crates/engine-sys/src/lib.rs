@@ -185,12 +185,35 @@ pub struct Face {
     pub skin: [f32; 5],
 }
 
-/// Portrait retouching applied while rendering.
-#[derive(Debug, Clone, Copy)]
+/// Most healing spots used in one render.
+pub const MAX_SPOTS: usize = 500;
+
+/// A healing spot in source pixels: the round area of `radius` around
+/// (x, y) is replaced by matching texture from nearby.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Spot {
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+}
+
+/// Portrait retouching applied while rendering. Every strength is 0 (off)
+/// to 100; only colours change, nothing moves.
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Portrait<'a> {
     pub faces: &'a [Face],
-    /// 0 (off) to 100.
     pub smoothing: f32,
+    /// Small dark or red spots on the skin fade.
+    pub blemishes: f32,
+    /// Shadows under the eyes lift.
+    pub dark_circles: f32,
+    /// Eyes brighter and clearer.
+    pub eyes: f32,
+    /// Teeth whiter.
+    pub teeth: f32,
+    /// Healing spots (work without faces too).
+    pub spots: &'a [Spot],
 }
 
 #[repr(C)]
@@ -198,6 +221,12 @@ struct PortraitRaw {
     faces: *const Face,
     face_count: u32,
     smoothing: f32,
+    blemishes: f32,
+    dark_circles: f32,
+    eyes: f32,
+    teeth: f32,
+    spots: *const Spot,
+    spot_count: u32,
 }
 
 #[repr(C)]
@@ -287,6 +316,8 @@ pub struct Background<'a> {
     pub edge: f32,
     /// The replacement for [`BackgroundMode::Image`].
     pub image: Option<&'a Source>,
+    /// 0..100: the edge follows fine detail such as hair more closely.
+    pub detail: f32,
 }
 
 #[repr(C)]
@@ -300,6 +331,7 @@ struct BackgroundRaw {
     saturation: f32,
     edge: f32,
     image: *const AibsSourceRaw,
+    detail: f32,
 }
 
 impl Background<'_> {
@@ -321,6 +353,7 @@ impl Background<'_> {
             saturation: self.saturation,
             edge: self.edge,
             image: self.image.map_or(std::ptr::null(), |s| s.raw as *const AibsSourceRaw),
+            detail: self.detail,
         }
     }
 }
@@ -957,6 +990,12 @@ impl Source {
             faces: p.faces.as_ptr(),
             face_count: p.faces.len().min(MAX_FACES) as u32,
             smoothing: p.smoothing,
+            blemishes: p.blemishes,
+            dark_circles: p.dark_circles,
+            eyes: p.eyes,
+            teeth: p.teeth,
+            spots: p.spots.as_ptr(),
+            spot_count: p.spots.len().min(MAX_SPOTS) as u32,
         });
         let portrait_ptr = portrait_raw.as_ref().map_or(std::ptr::null(), |p| p as *const PortraitRaw);
         let adjustments_ptr = adjustments.map_or(std::ptr::null(), |a| a as *const Adjustments);
@@ -1263,7 +1302,7 @@ mod tests {
     fn portrait_without_faces_changes_nothing() {
         let source = Source::open(PNG).unwrap();
         let plain = source.render(0.0, 0.0, 64.0, 48.0, 64, 48).unwrap();
-        let portrait = Portrait { faces: &[], smoothing: 100.0 };
+        let portrait = Portrait { faces: &[], smoothing: 100.0, ..Default::default() };
         let with = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, Some(portrait), None, None, None, &[], 0).unwrap();
         assert_eq!(plain.pixels, with.pixels);
     }
@@ -1305,6 +1344,7 @@ mod tests {
             saturation: 0.0,
             edge: 0.0,
             image: None,
+            detail: 0.0,
         };
         let out = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, None, Some(background), None, &[], 0).unwrap();
         let at = |image: &RgbaImage, x: usize, y: usize| image.pixels[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4].to_vec();

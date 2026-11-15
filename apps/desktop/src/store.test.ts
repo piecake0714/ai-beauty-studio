@@ -736,4 +736,28 @@ describe("app store", () => {
     await store.getState().undo();
     expect(store.getState().live.crop).toEqual({ x: 0, y: 0, width: 1, height: 1 });
   });
+
+  it("adds healing spots as undoable steps, sized from the longer side, inside the photo only", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    await store.getState().openPath("C:\\a.jpg");
+    store.getState().setTool("heal");
+    store.getState().setHealSize(0.05); // above the largest: kept at 4%
+    expect(store.getState().healSize).toBeCloseTo(0.04);
+    store.getState().setHealSize(0.02);
+    await store.getState().addSpot(10, 12);
+    // 2% of 40 px across, so a radius of 0.4 px, raised to 1.
+    expect(store.getState().edit?.adjustments.spots).toEqual([{ x: 10, y: 12, radius: 1 }]);
+    await store.getState().addSpot(-1, 5);
+    await store.getState().addSpot(40, 5);
+    expect(store.getState().live.spots).toHaveLength(1);
+    await store.getState().addSpot(20, 20);
+    expect(store.getState().live.spots).toHaveLength(2);
+    await store.getState().undo();
+    expect(store.getState().live.spots).toHaveLength(1);
+    await store.getState().clearSpots();
+    expect(store.getState().live.spots).toEqual([]);
+    await store.getState().undo();
+    expect(store.getState().live.spots).toHaveLength(1);
+  });
 });

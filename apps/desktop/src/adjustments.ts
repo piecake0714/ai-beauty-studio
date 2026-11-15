@@ -10,12 +10,30 @@ import {
 } from "./types";
 
 /** Adjustments shown in beginner mode. */
-export const BEGINNER: ScalarAdjustment[] = ["exposure", "contrast", "highlights", "shadows", "temperature", "saturation", "skinSmoothing"];
+export const BEGINNER: ScalarAdjustment[] = [
+  "exposure",
+  "contrast",
+  "highlights",
+  "shadows",
+  "temperature",
+  "saturation",
+  "skinSmoothing",
+  "blemishRemoval",
+  "darkCircles",
+  "eyeEnhance",
+  "teethWhitening",
+];
 
 export const LIGHT: ScalarAdjustment[] = ["exposure", "contrast", "highlights", "shadows", "whites", "blacks", "brightness"];
 export const COLOUR: ScalarAdjustment[] = ["temperature", "tint", "vibrance", "saturation"];
-export const PORTRAIT: ScalarAdjustment[] = ["skinSmoothing"];
-export const BACKGROUND: ScalarAdjustment[] = ["backgroundBlur", "backgroundBrightness", "backgroundSaturation", "backgroundEdge"];
+export const PORTRAIT: ScalarAdjustment[] = ["skinSmoothing", "blemishRemoval", "darkCircles", "eyeEnhance", "teethWhitening"];
+export const BACKGROUND: ScalarAdjustment[] = [
+  "backgroundBlur",
+  "backgroundBrightness",
+  "backgroundSaturation",
+  "backgroundEdge",
+  "backgroundDetail",
+];
 export const LIGHTING: ScalarAdjustment[] = ["lightIntensity", "lightSize", "lightHeight", "lightWarmth"];
 export const BANDS: BandAdjustment[] = ["hslHue", "hslSaturation", "hslLuminance"];
 
@@ -51,7 +69,15 @@ export function adjustmentsKey(adjustments: Adjustments): string {
   const bands = BANDS.map((key) => Array.from({ length: HSL_BANDS }, (_, i) => adjustments[key][i] ?? 0));
   const background = [adjustments.backgroundMode, ...adjustments.backgroundColor, adjustments.backgroundImage];
   const light = [adjustments.lightKind, adjustments.lightX, adjustments.lightY, adjustments.lightSubjectOnly];
-  return JSON.stringify([scalars, bands, background, light, adjustments.layers ?? [], adjustments.crop ?? FULL_CROP]);
+  return JSON.stringify([
+    scalars,
+    bands,
+    background,
+    light,
+    adjustments.layers ?? [],
+    adjustments.crop ?? FULL_CROP,
+    adjustments.spots ?? [],
+  ]);
 }
 
 /** A copy with a different background treatment. */
@@ -169,6 +195,13 @@ export function dragCrop(
   }
   return { x: left, y: top, width: right - left, height: bottom - top };
 }
+
+/** Most healing spots a document may have (as the core). */
+export const MAX_SPOTS = 500;
+/** Healing brush diameter limits, as fractions of the photo's longer side
+ * (the largest spot radius is 2% of it). */
+export const MIN_HEAL_SIZE = 0.003;
+export const MAX_HEAL_SIZE = 0.04;
 
 /** Most layers a document may have (as the engine side). */
 export const MAX_LAYERS = 16;
