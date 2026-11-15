@@ -2,12 +2,25 @@ import { createStore } from "zustand/vanilla";
 import { errorCode, type Api } from "./api";
 import { parseFrame, type Frame } from "./frame";
 import type { FileInfo, LanguagePreference, Settings, ThemePreference } from "./types";
+import {
+  clampCamera,
+  fitCamera,
+  panBy,
+  stepZoom,
+  zoomAt,
+  type Camera,
+  type Point,
+  type Size,
+} from "./view";
 
 export type View = "home" | "editor";
 
 export interface OpenDocument {
   path: string;
-  frame: Frame;
+  /** Whole image at reduced size, shown at once and under sharper renders. */
+  overview: Frame;
+  /** Full-resolution size. */
+  size: Size;
   /** Null when the file's details could not be read after opening. */
   info: FileInfo | null;
 }
@@ -23,6 +36,12 @@ export interface AppState {
   opening: boolean;
   /** Error code of the last failed action, shown until dismissed. */
   error: string | null;
+  /** Canvas size in device pixels; null until the editor is laid out. */
+  viewport: Size | null;
+  /** Null until both an image and a viewport exist. */
+  camera: Camera | null;
+  /** A sharper render of the current view is on its way. */
+  rendering: boolean;
 
   init(): Promise<void>;
   openPath(path: string): Promise<void>;
@@ -34,6 +53,16 @@ export interface AppState {
   clearRecent(): Promise<void>;
   dismissError(): void;
   dismissRecovered(): void;
+  setViewport(viewport: Size): void;
+  /** Multiply the zoom, keeping `anchor` (viewport pixels) fixed; default is the centre. */
+  zoomBy(factor: number, anchor?: Point): void;
+  zoomStep(direction: 1 | -1): void;
+  /** Set an exact zoom, keeping `anchor` fixed; default is the centre. */
+  zoomTo(zoom: number, anchor?: Point): void;
+  fitToView(): void;
+  pan(dx: number, dy: number): void;
+  setRendering(rendering: boolean): void;
+  reportError(code: string): void;
 }
 
 export const defaultSettings: Settings = { theme: "system", language: "system", recent: [] };
@@ -85,9 +114,15 @@ export function createAppStore(api: Api) {
         if (get().opening) return;
         set({ opening: true, error: null });
         try {
-          const frame = parseFrame(await api.openImage(path));
+          const overview = parseFrame(await api.openImage(path));
           const info = await api.fileInfo(path).catch(() => null);
-          set({ document: { path, frame, info }, view: "editor" });
+          const size = { width: overview.sourceWidth, height: overview.sourceHeight };
+          const viewport = get().viewport;
+          set({
+            document: { path, overview, size, info },
+            view: "editor",
+            camera: viewport ? fitCamera(size, viewport) : null,
+          });
         } catch (reason) {
           set({ error: errorCode(reason) });
         } finally {
@@ -118,6 +153,51 @@ export function createAppStore(api: Api) {
       clearRecent: () => changeSettings(() => api.clearRecent()),
       dismissError: () => set({ error: null }),
       dismissRecovered: () => set({ settingsRecovered: false }),
+      viewport: null,
+      camera: null,
+      rendering: false,
+
+      setViewport(viewport) {
+        const { document, camera } = get();
+        if (!document) {
+          set({ viewport });
+        } else if (!camera) {
+          set({ viewport, camera: fitCamera(document.size, viewport) });
+        } else {
+          set({ viewport, camera: clampCamera(camera, document.size, viewport) });
+        }
+      },
+
+      zoomTo(zoom, anchor) {
+        const { document, camera, viewport } = get();
+        if (!document || !camera || !viewport) return;
+        const point = anchor ?? { x: viewport.width / 2, y: viewport.height / 2 };
+        set({ camera: zoomAt(camera, zoom, point, document.size, viewport) });
+      },
+
+      zoomBy(factor, anchor) {
+        const camera = get().camera;
+        if (camera) get().zoomTo(camera.zoom * factor, anchor);
+      },
+
+      zoomStep(direction) {
+        const camera = get().camera;
+        if (camera) get().zoomTo(stepZoom(camera.zoom, direction));
+      },
+
+      fitToView() {
+        const { document, viewport } = get();
+        if (document && viewport) set({ camera: fitCamera(document.size, viewport) });
+      },
+
+      pan(dx, dy) {
+        const { document, camera, viewport } = get();
+        if (!document || !camera || !viewport) return;
+        set({ camera: panBy(camera, dx, dy, document.size, viewport) });
+      },
+
+      setRendering: (rendering) => set({ rendering }),
+      reportError: (code) => set({ error: code }),
     };
   });
 }

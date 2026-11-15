@@ -12,8 +12,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-pub use engine_sys::RgbaImage;
-use engine_sys::EngineError;
+pub use engine_sys::{EngineError, RgbaImage, Source};
 
 /// Why an image could not be opened. `code()` is the stable identifier the
 /// UI maps to a localized message.
@@ -57,6 +56,11 @@ impl std::error::Error for OpenError {}
 /// `max_dimension` limits the longer side of the returned pixels (zero keeps
 /// the full size). The file is only read.
 pub fn open_image(path: &Path, max_dimension: u32) -> Result<RgbaImage, OpenError> {
+    let bytes = read_image_file(path)?;
+    engine_sys::decode_rgba8(&bytes, max_dimension).map_err(map_engine_error)
+}
+
+fn read_image_file(path: &Path) -> Result<Vec<u8>, OpenError> {
     let bytes = fs::read(path).map_err(|e| match e.kind() {
         io::ErrorKind::NotFound => OpenError::NotFound,
         _ => OpenError::ReadFailed(e),
@@ -64,11 +68,22 @@ pub fn open_image(path: &Path, max_dimension: u32) -> Result<RgbaImage, OpenErro
     if bytes.is_empty() {
         return Err(OpenError::NotAnImage);
     }
-    engine_sys::decode_rgba8(&bytes, max_dimension).map_err(|e| match e {
+    Ok(bytes)
+}
+
+fn map_engine_error(error: EngineError) -> OpenError {
+    match error {
         EngineError::DecodeFailed => OpenError::NotAnImage,
         EngineError::OutOfMemory => OpenError::OutOfMemory,
         EngineError::InvalidArgument | EngineError::Internal => OpenError::Internal,
-    })
+    }
+}
+
+/// Open an image for editing: decode it at full resolution and keep it in
+/// the engine so any region can be rendered at any zoom. The file is only read.
+pub fn open_document(path: &Path) -> Result<Source, OpenError> {
+    let bytes = read_image_file(path)?;
+    Source::open(&bytes).map_err(map_engine_error)
 }
 
 /// Size of the header written by [`encode_frame`].
@@ -170,6 +185,14 @@ mod tests {
         let before = fs::read(&path).unwrap();
         open_image(&path, 16).unwrap();
         assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn opens_a_document_at_full_resolution() {
+        let source = open_document(&fixture("gradient_64x48.jpg")).unwrap();
+        assert_eq!((source.width(), source.height()), (64, 48));
+        assert_eq!(open_document(&fixture("corrupted.jpg")).unwrap_err().code(), "not_an_image");
+        assert_eq!(open_document(&fixture("nope.jpg")).unwrap_err().code(), "not_found");
     }
 
     #[test]

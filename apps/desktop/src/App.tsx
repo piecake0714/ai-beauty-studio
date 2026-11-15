@@ -36,6 +36,9 @@ export function App() {
   const pickAndOpen = useApp((s) => s.pickAndOpen);
   const dismissError = useApp((s) => s.dismissError);
   const dismissRecovered = useApp((s) => s.dismissRecovered);
+  const zoomStep = useApp((s) => s.zoomStep);
+  const zoomTo = useApp((s) => s.zoomTo);
+  const fitToView = useApp((s) => s.fitToView);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
 
@@ -49,17 +52,34 @@ export function App() {
     document.documentElement.lang = language;
   }, [language]);
 
-  // Ctrl+O opens an image from anywhere.
+  // Keyboard shortcuts. Ctrl+O works everywhere; zoom keys in the editor.
+  // preventDefault also stops the web view's own page zoom on these keys.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "o") {
+      if (!event.ctrlKey || event.altKey || settingsOpen) return;
+      const key = event.key.toLowerCase();
+      if (key === "o" && !event.shiftKey) {
         event.preventDefault();
         void pickAndOpen(t("imageFiles"));
+        return;
+      }
+      if (view !== "editor") return;
+      const actions: Record<string, () => void> = {
+        "0": fitToView,
+        "1": () => zoomTo(1),
+        "=": () => zoomStep(1),
+        "+": () => zoomStep(1),
+        "-": () => zoomStep(-1),
+      };
+      const action = actions[key];
+      if (action) {
+        event.preventDefault();
+        action();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [pickAndOpen, t]);
+  }, [pickAndOpen, t, view, settingsOpen, fitToView, zoomTo, zoomStep]);
 
   if (!ready) return <div className="app" aria-busy="true" />;
 

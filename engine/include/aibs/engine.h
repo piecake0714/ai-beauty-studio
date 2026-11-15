@@ -60,6 +60,36 @@ AIBS_API int32_t aibs_decode_rgba8(const uint8_t* bytes, size_t len,
 /* Release an image returned by the engine. Safe on a zeroed struct. */
 AIBS_API void aibs_image_free(aibs_image* image);
 
+/*
+ * A decoded image kept at full resolution inside the engine, with a
+ * precomputed pyramid of smaller copies so any region can be shown quickly
+ * at any zoom. Read-only once opened: several threads may render from the
+ * same source at once.
+ */
+typedef struct aibs_source aibs_source;
+
+/* Decode encoded bytes (JPEG, PNG, TIFF, WebP) into a new source. On
+ * success *out must be released with aibs_source_free. */
+AIBS_API int32_t aibs_source_open(const uint8_t* bytes, size_t len, aibs_source** out);
+
+/* Full-resolution size of the source. */
+AIBS_API void aibs_source_size(const aibs_source* source, uint32_t* width, uint32_t* height);
+
+/*
+ * Render the region of the source starting at (x, y) with size (w, h),
+ * in source pixels, into an out_width x out_height RGBA8 image. The region
+ * may extend past the source's edges; output pixels outside the source get
+ * alpha 0. Enlarging uses nearest-neighbour so individual pixels stay
+ * visible; reducing uses the pyramid and bilinear filtering.
+ */
+AIBS_API int32_t aibs_source_render(const aibs_source* source,
+                                    double x, double y, double w, double h,
+                                    uint32_t out_width, uint32_t out_height,
+                                    aibs_image* out);
+
+/* Release a source. Safe on NULL. */
+AIBS_API void aibs_source_free(aibs_source* source);
+
 #ifdef __cplusplus
 }
 #endif

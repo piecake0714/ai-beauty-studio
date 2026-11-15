@@ -2,38 +2,7 @@
 // non-zero on the first failed check. A test framework is added when the
 // suite grows past what this covers.
 #include "aibs/engine.h"
-
-#include <cstdio>
-#include <cstdlib>
-#include <fstream>
-#include <iterator>
-#include <string>
-#include <vector>
-
-#ifndef AIBS_FIXTURE_DIR
-#error "AIBS_FIXTURE_DIR must be defined by the build"
-#endif
-
-static int failures = 0;
-
-#define CHECK(cond)                                                        \
-    do {                                                                   \
-        if (!(cond)) {                                                     \
-            std::printf("FAILED %s:%d: %s\n", __FILE__, __LINE__, #cond);  \
-            ++failures;                                                    \
-        }                                                                  \
-    } while (0)
-
-static std::vector<uint8_t> read_fixture(const std::string& name) {
-    const std::string path = std::string(AIBS_FIXTURE_DIR) + "/" + name;
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
-        std::printf("cannot open fixture %s\n", path.c_str());
-        std::exit(2);
-    }
-    return std::vector<uint8_t>(std::istreambuf_iterator<char>(file),
-                                std::istreambuf_iterator<char>());
-}
+#include "check.h"
 
 // The PNG fixture is a 64x48 gradient: r = x * 4, g = y * 5, b = 128.
 static void test_png_decodes_exact_pixels() {
@@ -91,16 +60,10 @@ static void test_invalid_arguments() {
     aibs_image_free(nullptr);
 }
 
-int main() {
+void run_decode_tests() {
     test_png_decodes_exact_pixels();
     test_jpeg_decodes();
     test_downscale_keeps_aspect_and_reports_source();
     test_corrupted_file_is_rejected();
     test_invalid_arguments();
-    if (failures == 0) {
-        std::printf("all engine tests passed (engine %s)\n", aibs_engine_version());
-        return 0;
-    }
-    std::printf("%d check(s) failed\n", failures);
-    return 1;
 }

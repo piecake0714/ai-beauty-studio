@@ -36,7 +36,7 @@ describe("preferences", () => {
   });
 
   it("fills in placeholders", () => {
-    expect(translate("en", "status.preview", { width: 2048, height: 1365 })).toBe("Preview 2048 × 1365");
+    expect(translate("en", "zoom.percent", { percent: 25 })).toBe("25%");
     expect(translate("zh-Hant", "settings.version", { version: "0.1.0" })).toBe("版本 0.1.0");
   });
 });

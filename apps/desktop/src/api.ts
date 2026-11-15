@@ -12,7 +12,10 @@ export interface Api {
   getSettings(): Promise<Settings>;
   /** Show the file picker; resolves to null when cancelled. */
   pickImage(filterName: string): Promise<string | null>;
+  /** Open an image for editing; resolves to an overview frame of the whole image. */
   openImage(path: string): Promise<ArrayBuffer>;
+  /** Render part of the open image. Rejects with "superseded" when a newer request arrived. */
+  renderView(request: RenderRequest): Promise<ArrayBuffer>;
   thumbnail(path: string): Promise<ArrayBuffer>;
   fileInfo(path: string): Promise<FileInfo>;
   setTheme(theme: ThemePreference): Promise<Settings>;
@@ -20,6 +23,17 @@ export interface Api {
   removeRecent(path: string): Promise<Settings>;
   clearRecent(): Promise<Settings>;
   thirdPartyNotices(): Promise<string>;
+}
+
+export interface RenderRequest {
+  /** Increasing per request; the core drops requests older than the newest. */
+  id: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  outWidth: number;
+  outHeight: number;
 }
 
 export const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "tif", "tiff", "webp"];
@@ -36,6 +50,7 @@ export const tauriApi: Api = {
     return typeof path === "string" ? path : null;
   },
   openImage: (path) => invoke("open_image", { path }),
+  renderView: (request) => invoke("render_view", { request }),
   thumbnail: (path) => invoke("thumbnail", { path }),
   fileInfo: (path) => invoke("file_info", { path }),
   setTheme: (theme) => invoke("set_theme", { theme }),

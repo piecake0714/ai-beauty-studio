@@ -25,6 +25,7 @@ function fakeApi(overrides: Partial<Api> = {}): Api {
       settings = { ...settings, recent: [{ path, openedAt: 1 }, ...settings.recent] };
       return frameBuffer(4, 3);
     }),
+    renderView: vi.fn(async () => frameBuffer(4, 3)),
     thumbnail: vi.fn(async () => frameBuffer(2, 2)),
     fileInfo: vi.fn(async () => ({ name: "a.jpg", sizeBytes: 1234, format: "JPEG" as const })),
     setTheme: vi.fn(async (theme: ThemePreference) => (settings = { ...settings, theme })),
@@ -55,8 +56,8 @@ describe("app store", () => {
     const state = store.getState();
     expect(api.openImage).toHaveBeenCalledWith("C:\\照片\\a.jpg");
     expect(state.view).toBe("editor");
-    expect(state.document?.frame.width).toBe(4);
-    expect(state.document?.frame.sourceWidth).toBe(40);
+    expect(state.document?.overview.width).toBe(4);
+    expect(state.document?.size).toEqual({ width: 40, height: 30 });
     expect(state.document?.info?.format).toBe("JPEG");
     expect(state.settings.recent.map((r) => r.path)).toEqual(["C:\\照片\\a.jpg"]);
     expect(state.opening).toBe(false);
@@ -126,5 +127,46 @@ describe("app store", () => {
     expect(store.getState().settings.recent.map((r) => r.path)).toEqual(["C:\\b.jpg"]);
     await store.getState().clearRecent();
     expect(store.getState().settings.recent).toEqual([]);
+  });
+
+  it("fits a newly opened image once the canvas size is known", async () => {
+    const store = createAppStore(fakeApi());
+    await store.getState().openPath("C:\\a.jpg");
+    expect(store.getState().camera).toBeNull();
+    store.getState().setViewport({ width: 20, height: 30 });
+    // Image is 40 x 30: fit is limited by the width.
+    expect(store.getState().camera).toEqual({ zoom: 0.5, cx: 20, cy: 15 });
+  });
+
+  it("fits immediately when the canvas already has a size", async () => {
+    const store = createAppStore(fakeApi());
+    store.getState().setViewport({ width: 400, height: 300 });
+    await store.getState().openPath("C:\\a.jpg");
+    // Small images are not enlarged past 100%.
+    expect(store.getState().camera?.zoom).toBe(1);
+  });
+
+  it("zooms by steps, to 100% and back to fit", async () => {
+    const store = createAppStore(fakeApi());
+    store.getState().setViewport({ width: 20, height: 30 });
+    await store.getState().openPath("C:\\a.jpg");
+    store.getState().zoomStep(1);
+    expect(store.getState().camera?.zoom).toBeCloseTo(2 / 3);
+    store.getState().zoomTo(1);
+    expect(store.getState().camera?.zoom).toBe(1);
+    store.getState().fitToView();
+    expect(store.getState().camera?.zoom).toBe(0.5);
+  });
+
+  it("pans within the image and ignores zoom without an image", async () => {
+    const store = createAppStore(fakeApi());
+    store.getState().zoomBy(2);
+    expect(store.getState().camera).toBeNull();
+    store.getState().setViewport({ width: 20, height: 30 });
+    await store.getState().openPath("C:\\a.jpg");
+    store.getState().zoomTo(1);
+    store.getState().pan(-1000, 0);
+    // At 100% a 20-pixel-wide view of a 40-pixel image stops at the right edge.
+    expect(store.getState().camera?.cx).toBe(30);
   });
 });
