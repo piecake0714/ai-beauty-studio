@@ -505,9 +505,11 @@ pub fn expand(
                 let (ix, iy) = ((x as usize).min(cw - 1), (y as usize).min(ch - 1));
                 let i = gy * SIZE + gx;
                 if known[iy * cw + ix] {
-                    let p = sample(&canvas, cw, ch, x, y);
+                    // Nearest pixel: blending with the still-empty border
+                    // would darken the photo's edge.
+                    let o = (iy * cw + ix) * 4;
                     for c in 0..3 {
-                        image[c * plane + i] = (p[c] / 255.0) as f32;
+                        image[c * plane + i] = canvas[o + c] as f32 / 255.0;
                     }
                 } else {
                     hole[i] = 1.0;
@@ -796,16 +798,31 @@ mod tests {
         for (x, y) in [(0u32, 0u32), (63, 47), (30, 20)] {
             assert_eq!(at(&big, x + 16, y + 12), at(&original, x, y));
         }
-        // The border continues the photo next to it (the gradient's colours).
-        let mut difference = 0.0;
-        for y in 12..60u32 {
-            let inner = at(&big, 16, y);
-            let outer = at(&big, 12, y);
-            difference += (0..3).map(|c| (inner[c] as f64 - outer[c] as f64).abs()).sum::<f64>() / 3.0;
-            assert_eq!(outer[3], 255);
+        // The border is painted in the photo's colours (not left empty):
+        // its average is close to the photo's average.
+        let mean = |image: &engine_sys::RgbaImage, inside: bool| {
+            let mut sum = [0.0f64; 3];
+            let mut n = 0.0;
+            for y in 0..72u32 {
+                for x in 0..96u32 {
+                    let in_photo = (16..80).contains(&x) && (12..60).contains(&y);
+                    if in_photo == inside {
+                        let p = at(image, x, y);
+                        assert_eq!(p[3], 255);
+                        for c in 0..3 {
+                            sum[c] += p[c] as f64;
+                        }
+                        n += 1.0;
+                    }
+                }
+            }
+            sum.map(|v| v / n)
+        };
+        let (photo, border) = (mean(&big, true), mean(&big, false));
+        println!("expand: photo mean {photo:.0?}, border mean {border:.0?}");
+        for c in 0..3 {
+            assert!((photo[c] - border[c]).abs() < 45.0, "channel {c}");
         }
-        println!("expand: mean difference across the left edge {:.1}", difference / 48.0);
-        assert!(difference / 48.0 < 40.0);
         let none = Expansion::default();
         assert_eq!(none.pixels(100, 50), [0, 0, 0, 0]);
         assert_eq!(Expansion { left: 2.0, top: 0.5, right: -1.0, bottom: 0.1 }.pixels(100, 50), [100, 25, 0, 5]);
