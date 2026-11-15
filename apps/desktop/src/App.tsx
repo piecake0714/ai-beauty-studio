@@ -1,78 +1,89 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
-import { parseFrame, type Frame } from "./frame";
-import { detectLanguage, errorMessage, translate, type MessageKey } from "./i18n";
+import { useCallback, useEffect, useState } from "react";
+import { EditorView } from "./components/EditorView";
+import { HomeView } from "./components/HomeView";
+import { SettingsDialog } from "./components/SettingsDialog";
+import { TopBar } from "./components/TopBar";
+import { useApp, useI18n } from "./context";
+import { resolveTheme } from "./format";
+import { errorMessage } from "./i18n";
 
-const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "tif", "tiff", "webp"];
+const darkQuery = "(prefers-color-scheme: dark)";
+
+/** Applies the theme setting, following the system when asked to. */
+function useThemeAttribute() {
+  const preference = useApp((s) => s.settings.theme);
+  const [systemDark, setSystemDark] = useState(() => window.matchMedia(darkQuery).matches);
+
+  useEffect(() => {
+    const media = window.matchMedia(darkQuery);
+    const onChange = () => setSystemDark(media.matches);
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = resolveTheme(preference, systemDark);
+  }, [preference, systemDark]);
+}
 
 export function App() {
-  const language = useMemo(() => detectLanguage(navigator.language), []);
-  const t = (key: MessageKey) => translate(language, key);
+  const { t, language } = useI18n();
+  const ready = useApp((s) => s.ready);
+  const view = useApp((s) => s.view);
+  const error = useApp((s) => s.error);
+  const settingsRecovered = useApp((s) => s.settingsRecovered);
+  const init = useApp((s) => s.init);
+  const pickAndOpen = useApp((s) => s.pickAndOpen);
+  const dismissError = useApp((s) => s.dismissError);
+  const dismissRecovered = useApp((s) => s.dismissRecovered);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [frame, setFrame] = useState<Frame | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  useThemeAttribute();
+
+  useEffect(() => {
+    void init();
+  }, [init]);
 
   useEffect(() => {
     document.documentElement.lang = language;
   }, [language]);
 
-  // Draw the current frame. The pixels come from the Rust core; the UI only
-  // displays them.
+  // Ctrl+O opens an image from anywhere.
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !frame) return;
-    canvas.width = frame.width;
-    canvas.height = frame.height;
-    const context = canvas.getContext("2d");
-    if (!context) return;
-    context.putImageData(new ImageData(frame.pixels, frame.width, frame.height), 0, 0);
-  }, [frame]);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "o") {
+        event.preventDefault();
+        void pickAndOpen(t("imageFiles"));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pickAndOpen, t]);
 
-  async function handleOpen() {
-    const path = await open({
-      multiple: false,
-      directory: false,
-      filters: [{ name: t("imageFiles"), extensions: IMAGE_EXTENSIONS }],
-    });
-    if (typeof path !== "string") return; // dialog cancelled
-
-    setBusy(true);
-    setError(null);
-    try {
-      const buffer = await invoke<ArrayBuffer>("open_image", { path });
-      setFrame(parseFrame(buffer));
-    } catch (reason) {
-      // The core returns a stable error code; anything else is internal.
-      const code = typeof reason === "string" ? reason : "internal";
-      setError(errorMessage(language, code));
-    } finally {
-      setBusy(false);
-    }
-  }
+  if (!ready) return <div className="app" aria-busy="true" />;
 
   return (
     <div className="app">
-      <header className="toolbar">
-        <button type="button" onClick={handleOpen} disabled={busy}>
-          {busy ? t("opening") : t("openImage")}
-        </button>
-        {frame && (
-          <span className="info">
-            {t("sizeLabel")}: {frame.sourceWidth} × {frame.sourceHeight}
-          </span>
-        )}
-      </header>
-      {error && (
-        <div className="error" role="alert">
-          {error}
+      <TopBar onOpenSettings={() => setSettingsOpen(true)} />
+      {settingsRecovered && (
+        <div className="banner" role="status">
+          <span>{t("settings.recovered")}</span>
+          <button type="button" className="ghost small" onClick={dismissRecovered} aria-label={t("dismiss")}>
+            ×
+          </button>
         </div>
       )}
-      <main className="stage">
-        {frame ? <canvas ref={canvasRef} /> : <p className="hint">{t("emptyHint")}</p>}
-      </main>
+      {error && (
+        <div className="banner error" role="alert">
+          <span>{errorMessage(language, error)}</span>
+          <button type="button" className="ghost small" onClick={dismissError} aria-label={t("dismiss")}>
+            ×
+          </button>
+        </div>
+      )}
+      {view === "editor" ? <EditorView /> : <HomeView />}
+      {settingsOpen && <SettingsDialog onClose={closeSettings} />}
     </div>
   );
 }

@@ -26,10 +26,16 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "icon": ["icons/icon.ico", "icons/icon.png"],
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
     "resources": {
-      "../../../engine/dist/bin/aibs_engine.dll": "aibs_engine.dll"
+      "../../../engine/dist/bin/aibs_engine.dll": "aibs_engine.dll",
+      "resources/THIRD_PARTY_NOTICES.txt": "THIRD_PARTY_NOTICES.txt"
     },
     "windows": {
       "webviewInstallMode": {

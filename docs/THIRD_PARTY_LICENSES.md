@@ -2,22 +2,22 @@
 
 本專案不對外販售。最後核對：2026-11-15，依 CI run 43667162848（commit `2e6688a`）產生的報告。
 
-**結論：** 隨產品出貨的套件中，沒有 GPL、AGPL 等強著作權保留（strong copyleft）授權，也沒有僅限非商業使用的授權。需要注意的只有 4 個 MPL-2.0 套件（見下方），以及 C++ 套件的授權目前是依上游資訊記錄、尚未以實際的 copyright 檔逐一核對。
+**結論：** 隨產品出貨的套件中，沒有 GPL、AGPL 等強著作權保留（strong copyleft）授權，也沒有僅限非商業使用的授權。需要注意的只有 4 個 MPL-2.0 套件（見下方）。
 
 ## C++ 套件（vcpkg，靜態連結進 `aibs_engine.dll`）
 
-vcpkg 的 SPDX 檔對這 8 個套件的授權欄位都是 `NOASSERTION`，所以下表的授權是依各上游專案的公開資訊記錄。下一次 CI 會把各套件實際的 copyright 檔一併輸出，屆時逐一核對後再打勾。
+vcpkg 的 SPDX 檔對這 8 個套件的授權欄位都是 `NOASSERTION`，因此改以 CI 輸出的各套件 copyright 檔（CI run 43668844544）逐一核對。
 
-| 套件 | 鎖定版本 | 授權（依上游） | 已以 copyright 檔核對 |
+| 套件 | 鎖定版本 | 授權 | 已以 copyright 檔核對 |
 | --- | --- | --- | --- |
-| opencv4（core、imgproc、imgcodecs） | 4.14.0 | Apache-2.0 | ☐ |
-| libjpeg-turbo | 3.2.0#1 | IJG、BSD-3-Clause、Zlib | ☐ |
-| libpng | 1.6.59 | libpng-2.0 | ☐ |
-| libspng | 0.7.4#1 | BSD-2-Clause | ☐ |
-| tiff（libtiff） | 4.7.2 | libtiff | ☐ |
-| libwebp | 1.6.0#3 | BSD-3-Clause | ☐ |
-| liblzma（xz） | 5.8.4 | 0BSD | ☐ |
-| zlib | 1.3.2#2 | Zlib | ☐ |
+| opencv4（core、imgproc、imgcodecs） | 4.14.0 | Apache-2.0 | ☑ |
+| libjpeg-turbo | 3.2.0#1 | IJG、BSD-3-Clause、Zlib | ☑ |
+| libpng | 1.6.59 | libpng-2.0 | ☑ |
+| libspng | 0.7.4#1 | BSD-2-Clause | ☑ |
+| tiff（libtiff） | 4.7.2 | libtiff | ☑ |
+| libwebp | 1.6.0#3 | BSD-3-Clause | ☑ |
+| liblzma（xz） | 5.8.4 | 0BSD（xz 套件中的 GPL／LGPL 部分只適用於命令列工具與腳本，未出貨） | ☑ |
+| zlib | 1.3.2#2 | Zlib | ☑ |
 
 ## Rust 套件（連結進主程式）
 
@@ -63,5 +63,4 @@ Rust 工具鏈、CMake、vcpkg、Node.js、npm、TypeScript、Vite、Vitest、@t
 
 ## 尚未完成
 
-- 以 copyright 檔核對 8 個 C++ 套件（下一次 CI 輸出後進行）。
 - 在應用程式內提供「第三方授權」畫面或隨安裝程式附上授權聲明檔。散布任何版本給他人之前需要完成。

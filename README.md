@@ -8,7 +8,9 @@ Windows 桌面相片編輯軟體（開發中）。Tauri 2 + React/TypeScript 介
 
 ## 目前能做什麼
 
-第 1 階段只有一條完整路徑：開啟一張 JPEG、PNG、TIFF 或 WebP，由 Rust 讀檔、C++ 引擎解碼、畫面顯示。尚無任何編輯功能。
+- 首頁：開啟影像、最近開啟的檔案（含縮圖）。
+- 編輯器：顯示影像與影像資訊。尚無任何編輯功能。
+- 設定：主題、語言、關於與第三方授權聲明。
 
 ## 結構
 
@@ -45,8 +47,18 @@ cmake --install build/engine --config Release
 cd apps/desktop
 npm install
 npm test
+cd ../..
 
-# 3. Rust 測試與應用程式
+# 3. 產生第三方授權聲明（安裝程式與 cargo test 都需要這個檔案）
+cargo install cargo-about
+cargo about generate --format json -c about.toml `
+  --manifest-path apps/desktop/src-tauri/Cargo.toml -o build/cargo-about.json
+python scripts/build_notices.py --cargo-about build/cargo-about.json `
+  --vcpkg-share build/engine/vcpkg_installed/x64-windows-static-md/share `
+  --node-modules apps/desktop/node_modules --npm-lock apps/desktop/package-lock.json `
+  --out apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.txt
+
+# 4. Rust 測試與應用程式
 cargo test --workspace
 npx tauri dev      # 開發模式
 npx tauri build    # 產生安裝程式

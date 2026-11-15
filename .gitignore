@@ -11,3 +11,4 @@ ci-logs/
 ci-out/
 .vcpkg-cache/
 apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.txt
