@@ -95,7 +95,7 @@ export function ImageCanvas() {
     return () => observer.disconnect();
   }, [setViewport]);
 
-  function detailMatches(detail: Detail | null): detail is Detail {
+  function detailMatches(detail: Detail | null): boolean {
     const { camera, viewport, look } = latestRef.current;
     return (
       !!detail &&
