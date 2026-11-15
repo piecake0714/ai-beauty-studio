@@ -27,6 +27,7 @@ vcpkg 的 SPDX 檔對這 8 個套件的授權欄位都是 `NOASSERTION`，因此
 | DirectML（Microsoft.AI.DirectML） | 1.15.4，NuGet 套件 SHA-256 `4e7cb7dd…3615b9` | Microsoft Software License Terms for DirectML | 條款允許將其複製並散布於自行開發的應用程式中，不得單獨散布、不得移除 Microsoft 聲明（[授權頁面](https://www.nuget.org/packages/Microsoft.AI.DirectML/1.15.4/License)）；`LICENSE.txt` 與 `ThirdPartyNotices.txt` 一併收入聲明檔 |
 | YuNet 臉部偵測模型（OpenCV Zoo，face_detection_yunet_2023mar.onnx） | 2023mar，SHA-256 `8f2383e4…2552fa4` | MIT | 不存入 Git，由 `scripts/fetch_models.py` 從 Hugging Face 的 OpenCV Zoo 鏡像下載並驗證雜湊；授權紀錄 `models/licenses/face-yunet.json`，上游 LICENSE 全文收入聲明檔 |
 | BiRefNet lite 主體分離模型（BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx） | 官方 GitHub release v1，SHA-256 `56000243…d0f03333` | MIT | 不存入 Git，由 `scripts/fetch_models.py` 從 https://github.com/ZhengPeng7/BiRefNet/releases/tag/v1 下載並驗證雜湊；授權紀錄 `models/licenses/background-birefnet-lite.json`，上游 LICENSE 全文收入聲明檔。訓練資料集條款尚未查核 |
+| Depth Anything V2 Small 深度模型（onnx-community 轉檔，onnx/model.onnx） | SHA-256 `afb6a5c2…1df10c`，99,060,839 位元組 | Apache-2.0（只有 Small 版；Base／Large／Giant 為 CC-BY-NC-4.0，未使用） | 不存入 Git，由 `scripts/fetch_models.py` 下載並驗證雜湊；上游 LICENSE（Apache License 2.0 全文）收入聲明檔；授權紀錄 `models/licenses/depth-anything-v2-small.json`。訓練資料集條款尚未查核 |
 
 ## Rust 套件（連結進主程式）
 
