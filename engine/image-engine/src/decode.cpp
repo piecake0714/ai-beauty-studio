@@ -1,4 +1,5 @@
 #include "aibs/engine.h"
+#include "decode_internal.h"
 
 #include <algorithm>
 #include <climits>
@@ -25,11 +26,8 @@ int32_t aibs_decode_rgba8(const uint8_t* bytes, size_t len,
     }
 
     try {
-        // Wraps the caller's buffer without copying; imdecode only reads it.
-        const cv::Mat encoded(1, static_cast<int>(len), CV_8UC1,
-                              const_cast<uint8_t*>(bytes));
-        // IMREAD_COLOR: 8-bit BGR, EXIF orientation applied.
-        cv::Mat bgr = cv::imdecode(encoded, cv::IMREAD_COLOR);
+        // 8-bit BGR, upright (EXIF orientation applied; RAW developed).
+        cv::Mat bgr = aibs::decode_bgr(bytes, len, false);
         if (bgr.empty()) {
             return AIBS_ERR_DECODE_FAILED;
         }

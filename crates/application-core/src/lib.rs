@@ -11,6 +11,7 @@ pub mod export;
 pub mod files;
 pub mod info;
 pub mod jobs;
+pub mod looks;
 pub mod models;
 pub mod portrait;
 pub mod project;
@@ -228,7 +229,7 @@ mod tests {
         let render = |history: &History| {
             let engine = history.current().to_engine();
             source
-                .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&engine), None, None, &[], 0)
+                .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&engine), None, None, None, &[], 0)
                 .unwrap()
                 .pixels
         };
@@ -331,6 +332,7 @@ mod tests {
             include_str!("ai.rs"),
             include_str!("background.rs"),
             include_str!("jobs.rs"),
+            include_str!("looks.rs"),
             include_str!("portrait.rs"),
         ];
         for code in sources.iter().flat_map(|text| quoted_codes(text)) {

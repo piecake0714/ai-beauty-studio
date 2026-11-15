@@ -16,6 +16,22 @@ pub enum ImageFormat {
     Tiff,
     #[serde(rename = "WebP")]
     WebP,
+    /// A camera RAW file (many are TIFF containers; told apart by name).
+    #[serde(rename = "RAW")]
+    Raw,
+}
+
+/// File name extensions of camera RAW formats.
+pub const RAW_EXTENSIONS: &[&str] = &[
+    "dng", "cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "orf", "rw2", "raf", "pef", "srw", "3fr", "erf",
+    "kdc", "mrw", "x3f", "iiq", "rwl",
+];
+
+/// True when the path's extension is a camera RAW format.
+pub fn is_raw_name(path: &Path) -> bool {
+    path.extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .is_some_and(|e| RAW_EXTENSIONS.contains(&e.as_str()))
 }
 
 /// Identify the format from the file's first bytes (its signature), not
@@ -60,7 +76,8 @@ pub fn file_info(path: &Path) -> io::Result<FileInfo> {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default(),
         size_bytes: metadata.len(),
-        format: detect_format(&head[..filled]),
+        // A RAW name wins: CR2, NEF, DNG and others start like TIFF.
+        format: if is_raw_name(path) { Some(ImageFormat::Raw) } else { detect_format(&head[..filled]) },
     })
 }
 
@@ -96,6 +113,18 @@ mod tests {
         assert_eq!(detect_format(b"hello world"), None);
         assert_eq!(detect_format(b""), None);
         assert_eq!(detect_format(b"RIFF"), None);
+    }
+
+    #[test]
+    fn raw_files_are_named_by_their_extension() {
+        assert!(is_raw_name(Path::new("C:/photos/IMG_0001.CR2")));
+        assert!(is_raw_name(Path::new("a.dng")) && !is_raw_name(Path::new("a.tif")) && !is_raw_name(Path::new("dng")));
+        let dir = std::env::temp_dir().join(format!("aibs-info-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("shot.NEF");
+        fs::copy(fixture("gradient_64x48.tif"), &path).unwrap();
+        assert_eq!(file_info(&path).unwrap().format, Some(ImageFormat::Raw));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -26,6 +26,7 @@ import {
   type Crop,
   type ExportOptions,
   type Layer,
+  type LutEntry,
   type FaceStatus,
   type FacesReport,
   type FileInfo,
@@ -182,6 +183,8 @@ export interface AppState {
   painting: boolean;
   /** Healing brush diameter as a fraction of the photo's longer side. */
   healSize: number;
+  /** LUT presets and imported LUTs (loaded at startup). */
+  luts: LutEntry[];
 
   init(): Promise<void>;
   /** Open an image. With `discard`, asks first when adjustments would be lost. */
@@ -271,6 +274,12 @@ export interface AppState {
   extendStroke(x: number, y: number): void;
   endStroke(): Promise<void>;
   setHealSize(size: number): void;
+  /** Read the LUT list from the core. */
+  loadLuts(): Promise<void>;
+  /** Choose a LUT (one undoable step); "" for none. */
+  chooseLut(id: string): Promise<void>;
+  /** Pick a .cube file, add it to the library and choose it. */
+  importLut(filterName: string): Promise<void>;
   /** Add a healing spot at a source pixel (one undoable step). */
   addSpot(x: number, y: number): Promise<void>;
   /** Remove every healing spot (one undoable step). */
@@ -453,6 +462,7 @@ export function createAppStore(api: Api) {
             settingsRecovered: startup.settingsRecovered,
             recovery: await api.recoveryStatus().catch(() => null),
           });
+          void get().loadLuts();
           // Started by double-clicking a project or image: open it.
           if (startup.launchPath) await get().openPath(startup.launchPath);
         } catch (reason) {
@@ -745,6 +755,36 @@ export function createAppStore(api: Api) {
       },
 
       healSize: 0.015,
+      luts: [],
+
+      async loadLuts() {
+        try {
+          set({ luts: await api.listLuts() });
+        } catch (reason) {
+          set({ error: errorCode(reason) });
+        }
+      },
+
+      async chooseLut(id) {
+        if (!get().document) return;
+        const current = get().live.lut;
+        const amount = id === "" ? current.amount : current.amount > 0 ? current.amount : 100;
+        const next = { ...get().live, lut: { id, amount } };
+        set({ live: next });
+        await adoptEdit(() => api.commitAdjustments(next));
+      },
+
+      async importLut(filterName) {
+        const path = await api.pickLut(filterName);
+        if (!path) return;
+        try {
+          const entry = await api.importLut(path);
+          await get().loadLuts();
+          await get().chooseLut(entry.id);
+        } catch (reason) {
+          set({ error: errorCode(reason) });
+        }
+      },
 
       setHealSize: (size) => set({ healSize: Math.min(Math.max(size, MIN_HEAL_SIZE), MAX_HEAL_SIZE) }),
 

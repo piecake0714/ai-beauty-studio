@@ -72,7 +72,7 @@ bool half_matte(Matte& matte) {
 }
 
 bool render(const Source& source, const aibs_background* background, Image& out, uint32_t split = 0) {
-    return aibs_source_render(source.ptr, 0, 0, kW, kH, kW, kH, nullptr, nullptr, background, nullptr, nullptr, 0, split, &out.img) ==
+    return aibs_source_render(source.ptr, 0, 0, kW, kH, kW, kH, nullptr, nullptr, background, nullptr, nullptr, nullptr, 0, split, &out.img) ==
            AIBS_OK;
 }
 
@@ -135,7 +135,7 @@ void test_compositing() {
         }
         // The same at 3x zoom on part of the image.
         Image zoomed;
-        CHECK(aibs_source_render(source.ptr, 50, 20, 20, 10, 60, 30, nullptr, nullptr, &bg, nullptr, nullptr, 0, 0, &zoomed.img) == AIBS_OK);
+        CHECK(aibs_source_render(source.ptr, 50, 20, 20, 10, 60, 30, nullptr, nullptr, &bg, nullptr, nullptr, nullptr, 0, 0, &zoomed.img) == AIBS_OK);
         if (zoomed.img.data) {
             CHECK(same_px(zoomed.px(3, 15), original.px(51, 25)));
             const uint8_t* p = zoomed.px(57, 15);
@@ -325,7 +325,7 @@ void test_segmentation() {
         bg.matte = matte.ptr;
         bg.mode = AIBS_BG_TRANSPARENT;
         Image out;
-        CHECK(aibs_source_render(source.ptr, 0, 0, w, h, w, h, nullptr, nullptr, &bg, nullptr, nullptr, 0, 0, &out.img) == AIBS_OK);
+        CHECK(aibs_source_render(source.ptr, 0, 0, w, h, w, h, nullptr, nullptr, &bg, nullptr, nullptr, nullptr, 0, 0, &out.img) == AIBS_OK);
         if (out.img.data) {
             cv::Mat found(h, w, CV_8U);
             for (int y = 0; y < h; ++y)
@@ -365,9 +365,9 @@ void test_edge_detail() {
     bg.matte = matte.ptr;
     bg.mode = AIBS_BG_TRANSPARENT;
     Image plain, detailed;
-    CHECK(aibs_source_render(source.ptr, 0, 0, w, h, w, h, nullptr, nullptr, &bg, nullptr, nullptr, 0, 0, &plain.img) == AIBS_OK);
+    CHECK(aibs_source_render(source.ptr, 0, 0, w, h, w, h, nullptr, nullptr, &bg, nullptr, nullptr, nullptr, 0, 0, &plain.img) == AIBS_OK);
     bg.detail = 100.0f;
-    CHECK(aibs_source_render(source.ptr, 0, 0, w, h, w, h, nullptr, nullptr, &bg, nullptr, nullptr, 0, 0, &detailed.img) == AIBS_OK);
+    CHECK(aibs_source_render(source.ptr, 0, 0, w, h, w, h, nullptr, nullptr, &bg, nullptr, nullptr, nullptr, 0, 0, &detailed.img) == AIBS_OK);
     if (!plain.img.data || !detailed.img.data) return;
     const int a97 = plain.px(98, 30)[3], b97 = detailed.px(98, 30)[3];
     const int a103 = plain.px(101, 30)[3], b103 = detailed.px(101, 30)[3];

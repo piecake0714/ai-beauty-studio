@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adjustmentsKey, cropRect, dragCrop, fitCropToRatio, fromHex, withLayer, withLayerMoved, withNewLayer, withoutLayer, hasHiddenInBeginner, isIdentity, sameAdjustments, toHex, withBackground, withBand, withLightKind, withScalar } from "./adjustments";
+import { adjustmentsKey, cleanCurve, cropRect, curveValues, hasHiddenInBeginner as hidden, isNeutralLook, withCurve, withGrade, dragCrop, fitCropToRatio, fromHex, withLayer, withLayerMoved, withNewLayer, withoutLayer, hasHiddenInBeginner, isIdentity, sameAdjustments, toHex, withBackground, withBand, withLightKind, withScalar } from "./adjustments";
 import { NO_ADJUSTMENTS } from "./types";
 
 describe("adjustment helpers", () => {
@@ -121,4 +121,69 @@ describe("adjustment helpers", () => {
     expect(adjustmentsKey(a)).not.toBe(adjustmentsKey(NO_ADJUSTMENTS));
     expect(NO_ADJUSTMENTS.layers).toEqual([]);
   });
+
+  it("draws curves through their points without overshoot, as the engine does", () => {
+    expect(curveValues([], 5)).toEqual([0, 0.25, 0.5, 0.75, 1]);
+    const s = curveValues(
+      [
+        [0, 0],
+        [0.25, 0.15],
+        [0.5, 0.5],
+        [0.75, 0.85],
+        [1, 1],
+      ],
+      257,
+    );
+    expect(s[64]).toBeCloseTo(0.15, 5);
+    expect(s[128]).toBeCloseTo(0.5, 5);
+    expect(s.every((v, i) => i === 0 || v >= s[i - 1])).toBe(true);
+    // Flat outside the first and last point.
+    const lifted = curveValues(
+      [
+        [0.2, 0.3],
+        [0.8, 0.6],
+      ],
+      11,
+    );
+    expect(lifted[0]).toBe(0.3);
+    expect(lifted[10]).toBe(0.6);
+    // Cleaned like the core: sorted, in range, no duplicates.
+    expect(
+      cleanCurve([
+        [1, 1],
+        [0, 0.1],
+        [NaN, 0.5],
+        [0.5, 2],
+        [0.50001, 0.4],
+      ]),
+    ).toEqual([
+      [0, 0.1],
+      [0.5, 1],
+      [1, 1],
+    ]);
+  });
+
+  it("knows when curves, grading and the LUT change nothing", () => {
+    expect(isNeutralLook(NO_ADJUSTMENTS)).toBe(true);
+    const straight = withCurve(NO_ADJUSTMENTS, "red", [
+      [0, 0],
+      [1, 1],
+    ]);
+    expect(isNeutralLook(straight)).toBe(true);
+    const bent = withCurve(NO_ADJUSTMENTS, "red", [
+      [0, 0.1],
+      [1, 1],
+    ]);
+    expect(isNeutralLook(bent)).toBe(false);
+    expect(hidden(bent)).toBe(true);
+    const graded = withGrade(NO_ADJUSTMENTS, "shadows", { hue: 200, saturation: 30 });
+    expect(graded.grading.shadows).toEqual({ hue: 200, saturation: 30, luminance: 0 });
+    expect(isNeutralLook(graded)).toBe(false);
+    expect(adjustmentsKey(graded)).not.toBe(adjustmentsKey(NO_ADJUSTMENTS));
+    expect(isNeutralLook({ ...NO_ADJUSTMENTS, lut: { id: "builtin:warm", amount: 0 } })).toBe(true);
+    expect(isNeutralLook({ ...NO_ADJUSTMENTS, lut: { id: "builtin:warm", amount: 50 } })).toBe(false);
+    // A LUT is shown in beginner mode, so it is not "hidden".
+    expect(hidden({ ...NO_ADJUSTMENTS, lut: { id: "builtin:warm", amount: 50 } })).toBe(false);
+  });
 });
+

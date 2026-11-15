@@ -58,7 +58,7 @@ cv::Mat ramp() {
 
 bool render(const Source& source, const aibs_adjustments* adjustments, const aibs_layer* layers, uint32_t count,
             Image& out, uint32_t split = 0) {
-    return aibs_source_render(source.ptr, 0, 0, kW, kH, kW, kH, nullptr, adjustments, nullptr, nullptr, layers, count,
+    return aibs_source_render(source.ptr, 0, 0, kW, kH, kW, kH, nullptr, adjustments, nullptr, nullptr, nullptr, layers, count,
                               split, &out.img) == AIBS_OK;
 }
 
@@ -164,7 +164,7 @@ void test_strokes() {
     strokes[0].hardness = 0.6f;
     Image whole, zoomed;
     CHECK(render(source, nullptr, &layer, 1, whole));
-    CHECK(aibs_source_render(source.ptr, 50, 40, 20, 20, 80, 80, nullptr, nullptr, nullptr, nullptr, &layer, 1, 0,
+    CHECK(aibs_source_render(source.ptr, 50, 40, 20, 20, 80, 80, nullptr, nullptr, nullptr, nullptr, nullptr, &layer, 1, 0,
                              &zoomed.img) == AIBS_OK);
     if (whole.img.data && zoomed.img.data) {
         // Away from the stroke's edge the values agree; on the edge a pixel
@@ -188,9 +188,9 @@ void test_strokes() {
     }
     // Tiles of the same view meet exactly.
     Image top, bottom;
-    CHECK(aibs_source_render(source.ptr, 0, 0, kW, 50, kW, 50, nullptr, nullptr, nullptr, nullptr, &layer, 1, 0,
+    CHECK(aibs_source_render(source.ptr, 0, 0, kW, 50, kW, 50, nullptr, nullptr, nullptr, nullptr, nullptr, &layer, 1, 0,
                              &top.img) == AIBS_OK);
-    CHECK(aibs_source_render(source.ptr, 0, 50, kW, 50, kW, 50, nullptr, nullptr, nullptr, nullptr, &layer, 1, 0,
+    CHECK(aibs_source_render(source.ptr, 0, 50, kW, 50, kW, 50, nullptr, nullptr, nullptr, nullptr, nullptr, &layer, 1, 0,
                              &bottom.img) == AIBS_OK);
     if (top.img.data && bottom.img.data && whole.img.data) {
         bool exact = std::memcmp(top.img.data, whole.img.data, static_cast<size_t>(kW) * 50 * 4) == 0 &&

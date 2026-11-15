@@ -280,7 +280,7 @@ int32_t aibs_estimate_shape(const aibs_source* source, aibs_ai_session* model, a
         const int h = side(kDepthSide * full.rows / longer);
         Image input_image;
         int32_t status = aibs_source_render(source, 0, 0, full.cols, full.rows, static_cast<uint32_t>(w),
-                                            static_cast<uint32_t>(h), nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &input_image.img);
+                                            static_cast<uint32_t>(h), nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &input_image.img);
         if (status != AIBS_OK) return status;
         const size_t plane = static_cast<size_t>(w) * h;
         std::vector<float> input(3 * plane);

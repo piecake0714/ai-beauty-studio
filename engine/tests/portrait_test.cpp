@@ -212,11 +212,11 @@ void test_skin_smoothing() {
 
     Image original, off, smoothed, split;
     const int w = t.bgr.cols, h = t.bgr.rows;
-    CHECK(aibs_source_render(source.ptr, 0, 0, w, h, w, h, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &original.img) == AIBS_OK);
+    CHECK(aibs_source_render(source.ptr, 0, 0, w, h, w, h, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &original.img) == AIBS_OK);
     aibs_portrait portrait{&t.face, 1, 0.0f};
-    CHECK(aibs_source_render(source.ptr, 0, 0, w, h, w, h, &portrait, nullptr, nullptr, nullptr, nullptr, 0, 0, &off.img) == AIBS_OK);
+    CHECK(aibs_source_render(source.ptr, 0, 0, w, h, w, h, &portrait, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &off.img) == AIBS_OK);
     portrait.smoothing = 100.0f;
-    CHECK(aibs_source_render(source.ptr, 0, 0, w, h, w, h, &portrait, nullptr, nullptr, nullptr, nullptr, 0, 0, &smoothed.img) == AIBS_OK);
+    CHECK(aibs_source_render(source.ptr, 0, 0, w, h, w, h, &portrait, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &smoothed.img) == AIBS_OK);
     if (!original.img.data || !off.img.data || !smoothed.img.data) return;
 
     const size_t bytes = static_cast<size_t>(w) * h * 4;
@@ -253,7 +253,7 @@ void test_skin_smoothing() {
     }
 
     // Before/after split: left of the split stays original.
-    CHECK(aibs_source_render(source.ptr, 0, 0, w, h, w, h, &portrait, nullptr, nullptr, nullptr, nullptr, 0, 200, &split.img) == AIBS_OK);
+    CHECK(aibs_source_render(source.ptr, 0, 0, w, h, w, h, &portrait, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 200, &split.img) == AIBS_OK);
     if (split.img.data) {
         CHECK(std::memcmp(split.px(130, 230), original.px(130, 230), 4) == 0);
         CHECK(std::memcmp(split.px(260, 230), smoothed.px(260, 230), 4) == 0);
@@ -262,7 +262,7 @@ void test_skin_smoothing() {
     // The same face drawn at half size gets the same kind of smoothing:
     // the strength follows the face's size on screen.
     Image half;
-    CHECK(aibs_source_render(source.ptr, 0, 0, w, h, w / 2, h / 2, &portrait, nullptr, nullptr, nullptr, nullptr, 0, 0, &half.img) == AIBS_OK);
+    CHECK(aibs_source_render(source.ptr, 0, 0, w, h, w / 2, h / 2, &portrait, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &half.img) == AIBS_OK);
 }
 
 void test_detection_without_faces() {
@@ -358,7 +358,7 @@ void test_auto_adjust() {
 
 bool render_full(const Source& source, const cv::Mat& bgr, const aibs_portrait* portrait, Image& out) {
     return aibs_source_render(source.ptr, 0, 0, bgr.cols, bgr.rows, bgr.cols, bgr.rows, portrait, nullptr, nullptr,
-                              nullptr, nullptr, 0, 0, &out.img) == AIBS_OK &&
+                              nullptr, nullptr, nullptr, 0, 0, &out.img) == AIBS_OK &&
            out.img.data != nullptr;
 }
 
@@ -524,7 +524,7 @@ void test_healing_spots() {
     // (as when exporting in strips or viewing part of the photo).
     p.spots = &spot;
     Image part;
-    CHECK(aibs_source_render(source.ptr, 95, 70, 60, 60, 60, 60, &p, nullptr, nullptr, nullptr, nullptr, 0, 0, &part.img) ==
+    CHECK(aibs_source_render(source.ptr, 95, 70, 60, 60, 60, 60, &p, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &part.img) ==
           AIBS_OK);
     if (part.img.data) {
         bool same = true;

@@ -1083,3 +1083,60 @@ input:focus-visible {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
   pointer-events: auto;
 }
+
+/* Curves, grading, LUT (1.4) */
+.curve-editor,
+.grading,
+.lut-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.curve-box {
+  width: 100%;
+  max-width: 260px;
+  aspect-ratio: 1;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--canvas-bg);
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.curve-grid line,
+.curve-diagonal {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.curve-diagonal {
+  stroke-dasharray: 4 4;
+}
+
+.curve-point {
+  fill: var(--panel);
+  stroke-width: 2;
+}
+
+.grade-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: 4px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+
+.slider-row.hue input[type="range"] {
+  background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+  border-radius: 4px;
+}
+
+.lut-picker select {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+}

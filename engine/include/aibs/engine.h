@@ -197,6 +197,64 @@ typedef struct aibs_light {
 } aibs_light;
 
 /* ---------------------------------------------------------------------
+ * Look: RGB curves, colour grading and a 3D LUT (after the adjustments)
+ * ------------------------------------------------------------------- */
+
+/* A 3D colour lookup table: size^3 output colours, created by
+ * aibs_lut_create; read-only after. */
+typedef struct aibs_lut aibs_lut;
+
+/* Create a LUT from size^3 RGB triples (0..1, red changing fastest, then
+ * green, then blue, as in .cube files). size is 2 to 65. On success *out
+ * must be released with aibs_lut_free. */
+AIBS_API int32_t aibs_lut_create(const float* rgb, uint32_t size, aibs_lut** out);
+
+/* Release a LUT. Safe on NULL. */
+AIBS_API void aibs_lut_free(aibs_lut* lut);
+
+/* Points per RGB curve. */
+#define AIBS_CURVE_POINTS 16
+
+/* Curves, in order. */
+#define AIBS_CURVE_MASTER 0
+#define AIBS_CURVE_RED 1
+#define AIBS_CURVE_GREEN 2
+#define AIBS_CURVE_BLUE 3
+
+/* Grading ranges, in order. */
+#define AIBS_GRADE_SHADOWS 0
+#define AIBS_GRADE_MIDTONES 1
+#define AIBS_GRADE_HIGHLIGHTS 2
+
+/*
+ * A look applied to display values after the adjustments, in this order:
+ * colour grading, RGB curves (master, then each channel), then the LUT.
+ * All zero (and no LUT) changes nothing.
+ */
+typedef struct aibs_look {
+    /* Each curve: curve_points[i] (x, y) pairs, 0..1, x increasing; a
+     * smooth curve through them with no overshoot between points (flat
+     * before the first and after the last). Fewer than 2 usable points
+     * leave that curve straight. */
+    float curves[4][2 * AIBS_CURVE_POINTS];
+    uint32_t curve_points[4];
+    /* Grading per range (shadows, midtones, highlights): a colour of hue
+     * 0..360 degrees mixed in by saturation 0..100, and the range's
+     * brightness -100..100. */
+    float grade_hue[3];
+    float grade_saturation[3];
+    float grade_luminance[3];
+    /* -100 (more counts as shadows) .. 100 (more as highlights). */
+    float grade_balance;
+    const aibs_lut* lut;   /* may be NULL */
+    float lut_amount;      /* 0..100 */
+} aibs_look;
+
+/* Apply a look to pixel_count packed 8-bit RGB pixels, exactly as
+ * rendering does. in and out may be the same buffer. */
+AIBS_API int32_t aibs_look_rgb8(const aibs_look* look, const uint8_t* in, uint8_t* out, size_t pixel_count);
+
+/* ---------------------------------------------------------------------
  * Layers (applied after everything else, bottom to top)
  * ------------------------------------------------------------------- */
 
@@ -263,7 +321,8 @@ AIBS_API void aibs_source_size(const aibs_source* source, uint32_t* width, uint3
  * visible; reducing uses the pyramid and bilinear filtering.
  *
  * portrait (may be NULL) retouches skin first; adjustments (may be NULL)
- * follow, then light (may be NULL); background (may be NULL) is
+ * follow, then the look (curves, grading, LUT; may be NULL), then light
+ * (may be NULL); background (may be NULL) is
  * composited, then the layers (layer_count of them, may be 0) are applied
  * bottom to top. The leftmost original_columns output columns get none
  * of them, for a before/after split view; 0 changes everything, out_width
@@ -276,6 +335,7 @@ AIBS_API int32_t aibs_source_render(const aibs_source* source,
                                     const aibs_adjustments* adjustments,
                                     const aibs_background* background,
                                     const aibs_light* light,
+                                    const aibs_look* look,
                                     const aibs_layer* layers,
                                     uint32_t layer_count,
                                     uint32_t original_columns,

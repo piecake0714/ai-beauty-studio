@@ -10,6 +10,7 @@ import type {
   ExportOptions,
   FacesReport,
   FileInfo,
+  LutEntry,
   ModelOverview,
   LanguagePreference,
   RecoveryInfo,
@@ -76,6 +77,12 @@ export interface Api {
   startShapeEstimation(): Promise<number>;
   /** Open an image as a replacement background; resolves to its number. */
   addBackgroundImage(path: string): Promise<number>;
+  /** LUT presets and the user's imported LUTs. */
+  listLuts(): Promise<LutEntry[]>;
+  /** Check a .cube file and add it to the LUT library. */
+  importLut(path: string): Promise<LutEntry>;
+  /** Ask for a .cube file; null when cancelled. */
+  pickLut(filterName: string): Promise<string | null>;
   redo(): Promise<EditState>;
   hardwareInfo(): Promise<Hardware>;
   /** Start the AI self-test; resolves to its job id. */
@@ -112,7 +119,31 @@ export interface RenderRequest {
   originalColumns: number;
 }
 
-export const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "tif", "tiff", "webp"];
+/** Camera RAW files (developed by LibRaw). */
+export const RAW_EXTENSIONS = [
+  "dng",
+  "cr2",
+  "cr3",
+  "crw",
+  "nef",
+  "nrw",
+  "arw",
+  "srf",
+  "sr2",
+  "orf",
+  "rw2",
+  "raf",
+  "pef",
+  "srw",
+  "3fr",
+  "erf",
+  "kdc",
+  "mrw",
+  "x3f",
+  "iiq",
+  "rwl",
+];
+export const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "tif", "tiff", "webp", ...RAW_EXTENSIONS];
 export const PROJECT_EXTENSION = "aibs";
 
 /** True when `path` names a project file. */
@@ -173,6 +204,12 @@ export const tauriApi: Api = {
   startBackgroundSeparation: () => invoke("start_background_separation"),
   startShapeEstimation: () => invoke("start_shape_estimation"),
   addBackgroundImage: (path) => invoke("add_background_image", { path }),
+  listLuts: () => invoke("list_luts"),
+  importLut: (path) => invoke("import_lut", { path }),
+  async pickLut(filterName) {
+    const path = await open({ multiple: false, directory: false, filters: [{ name: filterName, extensions: ["cube"] }] });
+    return typeof path === "string" ? path : null;
+  },
   redo: () => invoke("redo"),
   hardwareInfo: () => invoke("hardware_info"),
   startAiSelfTest: () => invoke("start_ai_self_test"),

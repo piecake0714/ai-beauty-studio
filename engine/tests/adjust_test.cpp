@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <initializer_list>
 #include <limits>
+#include <vector>
 
 namespace {
 
@@ -185,6 +187,113 @@ void test_hsl_bands_are_selective() {
 
 }  // namespace
 
+// ---- look: curves, grading, LUT -----------------------------------------
+
+namespace look_tests {
+
+std::vector<uint8_t> grey_ramp() {
+    std::vector<uint8_t> px;
+    for (int v = 0; v < 256; ++v) {
+        px.push_back(static_cast<uint8_t>(v));
+        px.push_back(static_cast<uint8_t>(v));
+        px.push_back(static_cast<uint8_t>(v));
+    }
+    return px;
+}
+
+std::vector<uint8_t> run_look(const aibs_look& look, const std::vector<uint8_t>& in) {
+    std::vector<uint8_t> out(in.size());
+    CHECK(aibs_look_rgb8(&look, in.data(), out.data(), in.size() / 3) == AIBS_OK);
+    return out;
+}
+
+void set_curve(aibs_look& look, int which, std::initializer_list<float> xy) {
+    int i = 0;
+    for (const float v : xy) look.curves[which][i++] = v;
+    look.curve_points[which] = static_cast<uint32_t>(xy.size() / 2);
+}
+
+void test_empty_look_changes_nothing() {
+    const auto ramp = grey_ramp();
+    aibs_look look{};
+    CHECK(run_look(look, ramp) == ramp);
+    // A straight curve and a LUT at amount 0 change nothing either.
+    set_curve(look, AIBS_CURVE_MASTER, {0, 0, 1, 1});
+    CHECK(run_look(look, ramp) == ramp);
+    CHECK(aibs_look_rgb8(nullptr, ramp.data(), nullptr, 1) == AIBS_ERR_INVALID_ARGUMENT);
+}
+
+void test_curves() {
+    const auto ramp = grey_ramp();
+    // An S curve: darker shadows, brighter highlights, ends and middle kept,
+    // and never decreasing.
+    aibs_look look{};
+    set_curve(look, AIBS_CURVE_MASTER, {0, 0, 0.25f, 0.15f, 0.5f, 0.5f, 0.75f, 0.85f, 1, 1});
+    const auto out = run_look(look, ramp);
+    CHECK(out[3 * 64] < 64 - 15 && out[3 * 191] > 191 + 15);
+    CHECK(std::abs(out[3 * 128] - 128) <= 2 && out[0] == 0 && out[3 * 255] == 255);
+    bool rising = true;
+    for (int v = 1; v < 256; ++v) rising = rising && out[3 * v] >= out[3 * (v - 1)];
+    CHECK(rising);
+    // A red-only curve lifts red and leaves green and blue.
+    aibs_look red{};
+    set_curve(red, AIBS_CURVE_RED, {0, 0.2f, 1, 1});
+    const auto lifted = run_look(red, ramp);
+    CHECK(lifted[3 * 100] > 100 + 20 && lifted[3 * 100 + 1] == 100 && lifted[3 * 100 + 2] == 100);
+    // Points out of order or not numbers are skipped; one point is straight.
+    aibs_look bad{};
+    set_curve(bad, AIBS_CURVE_MASTER, {0.5f, 0.9f, 0.4f, 0.1f, NAN, 0.3f});
+    CHECK(run_look(bad, ramp) == ramp);
+}
+
+void test_grading() {
+    const auto ramp = grey_ramp();
+    // Blue shadows, orange highlights: dark greys turn blue, light greys
+    // orange; luminance stays close.
+    aibs_look look{};
+    look.grade_hue[AIBS_GRADE_SHADOWS] = 220;
+    look.grade_saturation[AIBS_GRADE_SHADOWS] = 100;
+    look.grade_hue[AIBS_GRADE_HIGHLIGHTS] = 30;
+    look.grade_saturation[AIBS_GRADE_HIGHLIGHTS] = 100;
+    const auto out = run_look(look, ramp);
+    const uint8_t* dark = &out[3 * 40];
+    const uint8_t* light = &out[3 * 215];
+    CHECK(dark[2] > dark[0] + 10);
+    CHECK(light[0] > light[2] + 10);
+    const double dark_luma = 0.2126 * dark[0] + 0.7152 * dark[1] + 0.0722 * dark[2];
+    CHECK(std::abs(dark_luma - 40) < 6);
+    // Midtone brightness raises the middle most.
+    aibs_look mid{};
+    mid.grade_luminance[AIBS_GRADE_MIDTONES] = 100;
+    const auto brighter = run_look(mid, ramp);
+    CHECK(brighter[3 * 128] - 128 > brighter[3 * 20] - 20);
+    CHECK(brighter[3 * 128] > 128 + 15);
+}
+
+void test_lut() {
+    // A 2x2x2 LUT that swaps red and blue.
+    const float swap[] = {0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1};
+    aibs_lut* lut = nullptr;
+    CHECK(aibs_lut_create(swap, 1, &lut) == AIBS_ERR_INVALID_ARGUMENT && lut == nullptr);
+    CHECK(aibs_lut_create(nullptr, 2, &lut) == AIBS_ERR_INVALID_ARGUMENT);
+    aibs_lut* made = nullptr;
+    CHECK(aibs_lut_create(swap, 2, &made) == AIBS_OK);
+    aibs_look look{};
+    look.lut = made;
+    look.lut_amount = 100;
+    const std::vector<uint8_t> px = {200, 100, 20};
+    const auto out = run_look(look, px);
+    CHECK(std::abs(out[0] - 20) <= 1 && std::abs(out[1] - 100) <= 1 && std::abs(out[2] - 200) <= 1);
+    look.lut_amount = 50;
+    const auto half = run_look(look, px);
+    CHECK(std::abs(half[0] - 110) <= 1 && std::abs(half[2] - 110) <= 1);
+    aibs_lut_free(made);
+    aibs_lut_free(lut);
+    aibs_lut_free(nullptr);
+}
+
+}  // namespace look_tests
+
 void run_adjust_tests() {
     test_all_zero_changes_nothing();
     test_exposure_plus_one_doubles_linear_light();
@@ -194,4 +303,8 @@ void run_adjust_tests() {
     test_white_balance();
     test_saturation_and_vibrance();
     test_hsl_bands_are_selective();
+    look_tests::test_empty_look_changes_nothing();
+    look_tests::test_curves();
+    look_tests::test_grading();
+    look_tests::test_lut();
 }

@@ -96,6 +96,12 @@ function fakeApi(overrides: Partial<Api> = {}): Api {
     startBackgroundSeparation: vi.fn(async () => 7),
     startShapeEstimation: vi.fn(async () => 8),
     addBackgroundImage: vi.fn(async () => 1),
+    listLuts: vi.fn(async () => [
+      { id: "builtin:warm", name: "warm", builtin: true },
+      { id: "user:Mine", name: "Mine", builtin: false },
+    ]),
+    importLut: vi.fn(async () => ({ id: "user:New", name: "New", builtin: false })),
+    pickLut: vi.fn(async () => "C:\\looks\\New.cube"),
     facesStatus: vi.fn(async () => ({ serial, status: { state: "detecting" as const } })),
     onFaces: vi.fn(async () => () => {}),
     autoEnhance: vi.fn(async () => {
@@ -759,5 +765,27 @@ describe("app store", () => {
     expect(store.getState().live.spots).toEqual([]);
     await store.getState().undo();
     expect(store.getState().live.spots).toHaveLength(1);
+  });
+
+  it("loads LUTs at startup, chooses one at full strength and imports .cube files", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    await store.getState().init();
+    await vi.waitFor(() => expect(store.getState().luts).toHaveLength(2));
+    await store.getState().openPath("C:\\a.jpg");
+    await store.getState().chooseLut("builtin:warm");
+    expect(store.getState().edit?.adjustments.lut).toEqual({ id: "builtin:warm", amount: 100 });
+    // A chosen strength is kept when switching.
+    store.getState().setLive({ ...store.getState().live, lut: { id: "builtin:warm", amount: 40 } });
+    await store.getState().commitLive();
+    await store.getState().chooseLut("user:Mine");
+    expect(store.getState().live.lut).toEqual({ id: "user:Mine", amount: 40 });
+    await store.getState().importLut("LUT");
+    expect(api.importLut).toHaveBeenCalledWith("C:\\looks\\New.cube");
+    expect(store.getState().live.lut.id).toBe("user:New");
+    await store.getState().undo();
+    expect(store.getState().live.lut.id).toBe("user:Mine");
+    await store.getState().chooseLut("");
+    expect(store.getState().live.lut.id).toBe("");
   });
 });

@@ -2,11 +2,13 @@
 
 本專案不對外販售。最後核對：2026-11-15，依 CI run 43674211393（commit `797df80`）產生的報告。
 
-**結論：** 隨產品出貨的套件中，沒有 GPL、AGPL 等強著作權保留（strong copyleft）授權，也沒有僅限非商業使用的授權。需要注意的只有 4 個 MPL-2.0 套件（見下方）。
+**結論：** 隨產品出貨的套件中，沒有 GPL、AGPL 等強著作權保留（strong copyleft）授權，也沒有僅限非商業使用的授權。需要注意的只有 4 個 MPL-2.0 套件（見下方），以及 1.4 加入的 LibRaw：它可選 LGPL-2.1 或 CDDL-1.0，因為是靜態連結，本專案選用 CDDL-1.0（以檔案為單位的弱著作權保留；未修改 LibRaw 原始碼）。
+
+1.4 新增的 3 個套件（libraw、lcms、jasper）依 CI run 43748576587（commit `f64afa4`）輸出的 copyright 檔與 vcpkg.tsv 核對，2026-11-16。
 
 ## C++ 套件（vcpkg，靜態連結進 `aibs_engine.dll`）
 
-vcpkg 的 SPDX 檔對這 8 個套件的授權欄位都是 `NOASSERTION`，因此改以 CI 輸出的各套件 copyright 檔（CI run 43668844544）逐一核對。
+vcpkg 的 SPDX 檔對這 11 個套件的授權欄位都是 `NOASSERTION`，因此改以 CI 輸出的各套件 copyright 檔（原 8 個：CI run 43668844544；1.4 新增 3 個：CI run 43748576587）逐一核對。
 
 | 套件 | 鎖定版本 | 授權 | 已以 copyright 檔核對 |
 | --- | --- | --- | --- |
@@ -18,6 +20,9 @@ vcpkg 的 SPDX 檔對這 8 個套件的授權欄位都是 `NOASSERTION`，因此
 | libwebp | 1.6.0#3 | BSD-3-Clause | ☑ |
 | liblzma（xz） | 5.8.4 | 0BSD（xz 套件中的 GPL／LGPL 部分只適用於命令列工具與腳本，未出貨） | ☑ |
 | zlib | 1.3.2#2 | Zlib | ☑ |
+| libraw（相機 RAW 解碼，1.4） | 0.22.3 | LGPL-2.1 或 CDDL-1.0 擇一，本專案採 CDDL-1.0；內含 dcraw（非 RESTRICTED 部分）、DCB／FBDD（BSD-3-Clause 類）、X3F（BSD 類）、Adobe DNG SDK 片段（MIT） | ☑ |
+| lcms（Little CMS，LibRaw 的相依套件） | 2.19.1#1 | MIT | ☑ |
+| jasper（LibRaw 的相依套件） | 4.2.9 | JasPer License 2.0（MIT 類寬鬆授權） | ☑ |
 
 ## AI 執行環境（隨安裝程式出貨的 DLL）
 

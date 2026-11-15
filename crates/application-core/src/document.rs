@@ -40,6 +40,111 @@ pub enum LightSetting {
 /// Pixel tolerance when a crop edge is turned into whole pixels.
 const CROP_SNAP: f64 = 0.01;
 
+/// RGB curves: (x, y) points, 0..1, per curve. Fewer than 2 points is a
+/// straight curve.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Curves {
+    pub master: Vec<[f32; 2]>,
+    pub red: Vec<[f32; 2]>,
+    pub green: Vec<[f32; 2]>,
+    pub blue: Vec<[f32; 2]>,
+}
+
+/// Points of one curve made usable: numbers only, inside 0..1, sorted by
+/// x with no two at the same x, at most the engine's limit.
+fn clean_curve(points: &[[f32; 2]]) -> Vec<[f32; 2]> {
+    let mut kept: Vec<[f32; 2]> = points
+        .iter()
+        .filter(|p| p[0].is_finite() && p[1].is_finite())
+        .map(|p| [p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0)])
+        .collect();
+    kept.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    kept.dedup_by(|b, a| (b[0] - a[0]).abs() < 1e-4);
+    kept.truncate(engine_sys::CURVE_POINTS);
+    kept
+}
+
+/// True when a curve leaves values as they are.
+fn straight(points: &[[f32; 2]]) -> bool {
+    points.len() < 2
+        || (points.iter().all(|p| (p[0] - p[1]).abs() < 1e-4)
+            && points[0][0] <= 1e-4
+            && points[points.len() - 1][0] >= 1.0 - 1e-4)
+}
+
+impl Curves {
+    pub fn clamped(&self) -> Curves {
+        Curves {
+            master: clean_curve(&self.master),
+            red: clean_curve(&self.red),
+            green: clean_curve(&self.green),
+            blue: clean_curve(&self.blue),
+        }
+    }
+
+    pub fn is_straight(&self) -> bool {
+        [&self.master, &self.red, &self.green, &self.blue].iter().all(|c| straight(c))
+    }
+}
+
+/// Colour grading of one tonal range.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GradeRange {
+    /// 0..360 degrees.
+    pub hue: f32,
+    /// 0..100.
+    pub saturation: f32,
+    /// -100..100.
+    pub luminance: f32,
+}
+
+impl GradeRange {
+    fn clamped(&self) -> GradeRange {
+        GradeRange {
+            hue: if self.hue.is_finite() { self.hue.rem_euclid(360.0) } else { 0.0 },
+            saturation: fix(self.saturation, 100.0).max(0.0),
+            luminance: fix(self.luminance, 100.0),
+        }
+    }
+}
+
+/// Three-way colour grading.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Grading {
+    pub shadows: GradeRange,
+    pub midtones: GradeRange,
+    pub highlights: GradeRange,
+    /// -100 (more counts as shadows) .. 100 (more as highlights).
+    pub balance: f32,
+}
+
+impl Grading {
+    pub fn clamped(&self) -> Grading {
+        Grading {
+            shadows: self.shadows.clamped(),
+            midtones: self.midtones.clamped(),
+            highlights: self.highlights.clamped(),
+            balance: fix(self.balance, 100.0),
+        }
+    }
+
+    pub fn is_neutral(&self) -> bool {
+        [self.shadows, self.midtones, self.highlights].iter().all(|r| r.saturation == 0.0 && r.luminance == 0.0)
+    }
+}
+
+/// The chosen LUT: an id from the LUT library (empty for none) and how
+/// strongly it applies, 0..100.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LutChoice {
+    pub id: String,
+    pub amount: f32,
+}
+
 /// Most healing spots a document may have.
 pub const MAX_SPOTS: usize = engine_sys::MAX_SPOTS;
 /// Largest healing spot radius, in source pixels.
@@ -417,6 +522,10 @@ pub struct Adjustments {
     /// Layers over the photo, bottom first.
     pub layers: Vec<Layer>,
     pub crop: Crop,
+    /// RGB curves, applied after the colour adjustments.
+    pub curves: Curves,
+    pub grading: Grading,
+    pub lut: LutChoice,
 }
 
 fn fix(value: f32, limit: f32) -> f32 {
@@ -470,7 +579,30 @@ impl Adjustments {
             light_subject_only: self.light_subject_only,
             layers: self.layers.iter().take(MAX_LAYERS).map(Layer::clamped).collect(),
             crop: self.crop.clamped(),
+            curves: self.curves.clamped(),
+            grading: self.grading.clamped(),
+            lut: LutChoice { id: self.lut.id.chars().take(200).collect(), amount: fix(self.lut.amount, 100.0).max(0.0) },
         }
+    }
+
+    /// The look (grading, curves, LUT) for the engine, from clamped
+    /// values; `lut` is the loaded LUT of `self.lut.id`, if any. None when
+    /// it would change nothing.
+    pub fn look<'a>(&'a self, lut: Option<&'a engine_sys::Lut>) -> Option<engine_sys::Look<'a>> {
+        let lut = lut.filter(|_| !self.lut.id.is_empty() && self.lut.amount > 0.0);
+        if self.curves.is_straight() && self.grading.is_neutral() && lut.is_none() {
+            return None;
+        }
+        let g = &self.grading;
+        Some(engine_sys::Look {
+            curves: [&self.curves.master, &self.curves.red, &self.curves.green, &self.curves.blue],
+            grade_hue: [g.shadows.hue, g.midtones.hue, g.highlights.hue],
+            grade_saturation: [g.shadows.saturation, g.midtones.saturation, g.highlights.saturation],
+            grade_luminance: [g.shadows.luminance, g.midtones.luminance, g.highlights.luminance],
+            grade_balance: g.balance,
+            lut,
+            lut_amount: self.lut.amount,
+        })
     }
 
     /// The visible layers prepared for the engine (from clamped values).
@@ -846,6 +978,45 @@ mod tests {
         assert_eq!(adjustments["hslHue"].as_array().unwrap().len(), 8);
         assert_eq!(json["canUndo"], false);
         assert_eq!(json["edited"], false);
+    }
+
+    #[test]
+    fn curves_grading_and_lut_are_cleaned_and_make_a_look() {
+        let a = Adjustments {
+            curves: Curves {
+                master: vec![[1.0, 1.0], [0.0, 0.1], [f32::NAN, 0.5], [0.5, 2.0], [0.50001, 0.4]],
+                red: (0..30).map(|i| [i as f32 / 29.0, i as f32 / 29.0]).collect(),
+                ..Default::default()
+            },
+            grading: Grading {
+                shadows: GradeRange { hue: -30.0, saturation: 150.0, luminance: -300.0 },
+                balance: f32::INFINITY,
+                ..Default::default()
+            },
+            lut: LutChoice { id: "builtin:warm".into(), amount: 130.0 },
+            ..Default::default()
+        }
+        .clamped();
+        assert_eq!(a.curves.master, vec![[0.0, 0.1], [0.5, 1.0], [1.0, 1.0]]);
+        assert_eq!(a.curves.red.len(), engine_sys::CURVE_POINTS);
+        assert_eq!(a.grading.shadows, GradeRange { hue: 330.0, saturation: 100.0, luminance: -100.0 });
+        assert_eq!(a.grading.balance, 0.0);
+        assert_eq!(a.lut.amount, 100.0);
+        let look = a.look(None).unwrap();
+        assert_eq!(look.curves[0].len(), 3);
+        assert!(look.lut.is_none());
+        // Nothing set: no look at all; a straight red curve counts as nothing.
+        assert!(Adjustments::default().look(None).is_none());
+        let straight = Adjustments {
+            curves: Curves { red: vec![[0.0, 0.0], [1.0, 1.0]], ..Default::default() },
+            ..Default::default()
+        };
+        assert!(straight.clamped().look(None).is_none());
+        let json = serde_json::to_value(&a).unwrap();
+        assert!(json["curves"]["master"].is_array() && json["grading"]["shadows"]["hue"].is_number());
+        assert_eq!(json["lut"]["id"], "builtin:warm");
+        let old: Adjustments = serde_json::from_str("{}").unwrap();
+        assert!(old.curves.is_straight() && old.grading.is_neutral() && old.lut.id.is_empty());
     }
 
     #[test]
