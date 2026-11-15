@@ -339,6 +339,43 @@ AIBS_API int32_t aibs_shape_create(const float* depth, uint32_t width, uint32_t 
 /* Release a shape. Safe on NULL. */
 AIBS_API void aibs_shape_free(aibs_shape* shape);
 
+/* ---------------------------------------------------------------------
+ * Saving: encoding images and reading back analysis results
+ * ------------------------------------------------------------------- */
+
+#define AIBS_FORMAT_JPEG 1
+#define AIBS_FORMAT_PNG 2
+
+/* Bytes owned by the engine; release with aibs_buffer_free. */
+typedef struct aibs_buffer {
+    uint8_t* data;
+    size_t size;
+} aibs_buffer;
+
+/*
+ * Encode 8-bit pixels (channels: 1 grey, 3 RGB, 4 RGBA; rows packed) as
+ * JPEG (quality 1..100; 1 or 3 channels) or PNG (any). On success
+ * out->data must be released with aibs_buffer_free.
+ */
+AIBS_API int32_t aibs_encode(const uint8_t* pixels, uint32_t width, uint32_t height, uint32_t channels,
+                             uint32_t format, uint32_t quality, aibs_buffer* out);
+
+/* Release encoded bytes. Safe on an empty buffer; leaves it empty. */
+AIBS_API void aibs_buffer_free(aibs_buffer* buffer);
+
+/* A matte's coverage values (read-only, valid while the matte lives). */
+AIBS_API int32_t aibs_matte_values(const aibs_matte* matte, uint32_t* width, uint32_t* height,
+                                   uint32_t* source_width, uint32_t* source_height, const uint8_t** values);
+
+/* A shape's unit surface directions, x/y/z per pixel (read-only, valid
+ * while the shape lives). */
+AIBS_API int32_t aibs_shape_normals(const aibs_shape* shape, uint32_t* width, uint32_t* height,
+                                    uint32_t* source_width, uint32_t* source_height, const float** normals);
+
+/* A shape from saved surface directions (x/y/z per pixel; renormalised). */
+AIBS_API int32_t aibs_shape_from_normals(const float* normals, uint32_t width, uint32_t height,
+                                         uint32_t source_width, uint32_t source_height, aibs_shape** out);
+
 #ifdef __cplusplus
 }
 #endif

@@ -7,10 +7,14 @@
 pub mod ai;
 pub mod background;
 pub mod document;
+pub mod export;
+pub mod files;
 pub mod info;
 pub mod jobs;
 pub mod models;
 pub mod portrait;
+pub mod project;
+pub mod recovery;
 pub mod settings;
 
 use std::fmt;
@@ -19,7 +23,8 @@ use std::io;
 use std::path::Path;
 
 pub use engine_sys::{
-    AiSession, Background, BackgroundMode, EngineError, Face, Light, LightKind, Matte, Portrait, RgbaImage, Shape, Source,
+    encode, AiSession, Background, BackgroundMode, EngineError, Face, ImageFormat as EncodeFormat, Light, LightKind, Matte,
+    Plane, Portrait, RgbaImage, Shape, Source,
 };
 
 /// Why an image could not be opened. `code()` is the stable identifier the
@@ -88,6 +93,11 @@ fn map_engine_error(error: EngineError) -> OpenError {
         | EngineError::ModelInvalid
         | EngineError::InferenceFailed => OpenError::Internal,
     }
+}
+
+/// Decode image bytes (for example a project's preview) for display.
+pub fn decode_image(bytes: &[u8], max_dimension: u32) -> Result<RgbaImage, OpenError> {
+    engine_sys::decode_rgba8(bytes, max_dimension).map_err(map_engine_error)
 }
 
 /// Open an image for editing: decode it at full resolution and keep it in

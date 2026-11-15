@@ -80,6 +80,40 @@ extern "C" {
         out: *mut *mut ShapeRaw,
     ) -> i32;
     fn aibs_shape_free(shape: *mut ShapeRaw);
+    fn aibs_encode(
+        pixels: *const u8,
+        width: u32,
+        height: u32,
+        channels: u32,
+        format: u32,
+        quality: u32,
+        out: *mut BufferRaw,
+    ) -> i32;
+    fn aibs_buffer_free(buffer: *mut BufferRaw);
+    fn aibs_matte_values(
+        matte: *const MatteRaw,
+        width: *mut u32,
+        height: *mut u32,
+        source_width: *mut u32,
+        source_height: *mut u32,
+        values: *mut *const u8,
+    ) -> i32;
+    fn aibs_shape_normals(
+        shape: *const ShapeRaw,
+        width: *mut u32,
+        height: *mut u32,
+        source_width: *mut u32,
+        source_height: *mut u32,
+        normals: *mut *const f32,
+    ) -> i32;
+    fn aibs_shape_from_normals(
+        normals: *const f32,
+        width: u32,
+        height: u32,
+        source_width: u32,
+        source_height: u32,
+        out: *mut *mut ShapeRaw,
+    ) -> i32;
     fn aibs_auto_adjust(source: *const AibsSourceRaw, faces: *const Face, face_count: u32, out: *mut Adjustments) -> i32;
     fn aibs_gpu_list(out: *mut GpuInfoRaw, capacity: u32) -> u32;
     fn aibs_ai_runtime_version() -> *const c_char;
@@ -399,6 +433,96 @@ impl Light<'_> {
             subject: self.subject.map_or(std::ptr::null(), |m| m.raw as *const MatteRaw),
             shape: self.shape.map_or(std::ptr::null(), |s| s.raw as *const ShapeRaw),
         }
+    }
+}
+
+#[repr(C)]
+struct BufferRaw {
+    data: *mut u8,
+    size: usize,
+}
+
+/// File formats for [`encode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageFormat {
+    /// `quality` 1..=100; 1 or 3 channels.
+    Jpeg { quality: u32 },
+    Png,
+}
+
+/// Encode packed 8-bit pixels (1 grey, 3 RGB or 4 RGBA channels).
+pub fn encode(pixels: &[u8], width: u32, height: u32, channels: u32, format: ImageFormat) -> Result<Vec<u8>, EngineError> {
+    if pixels.len() != width as usize * height as usize * channels as usize {
+        return Err(EngineError::InvalidArgument);
+    }
+    let (code, quality) = match format {
+        ImageFormat::Jpeg { quality } => (1, quality),
+        ImageFormat::Png => (2, 0),
+    };
+    let mut raw = BufferRaw { data: std::ptr::null_mut(), size: 0 };
+    // SAFETY: `pixels` holds width * height * channels bytes; `raw` is writable.
+    status_to_result(unsafe { aibs_encode(pixels.as_ptr(), width, height, channels, code, quality, &mut raw) })?;
+    // SAFETY: on success `raw` holds `size` engine-owned bytes, freed once below.
+    let bytes = unsafe { std::slice::from_raw_parts(raw.data, raw.size).to_vec() };
+    // SAFETY: as above.
+    unsafe { aibs_buffer_free(&mut raw) };
+    Ok(bytes)
+}
+
+/// Saved form of a matte or shape: its own size, the source size it
+/// stretches over, and its values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Plane<T> {
+    pub width: u32,
+    pub height: u32,
+    pub source_width: u32,
+    pub source_height: u32,
+    pub values: Vec<T>,
+}
+
+impl Matte {
+    /// The coverage values, for saving.
+    pub fn values(&self) -> Result<Plane<u8>, EngineError> {
+        let (mut w, mut h, mut sw, mut sh) = (0, 0, 0, 0);
+        let mut data: *const u8 = std::ptr::null();
+        // SAFETY: valid matte; outputs are writable.
+        status_to_result(unsafe { aibs_matte_values(self.raw, &mut w, &mut h, &mut sw, &mut sh, &mut data) })?;
+        // SAFETY: the engine returned w * h bytes valid while the matte lives.
+        let values = unsafe { std::slice::from_raw_parts(data, w as usize * h as usize).to_vec() };
+        Ok(Plane { width: w, height: h, source_width: sw, source_height: sh, values })
+    }
+}
+
+impl Shape {
+    /// The surface directions (x, y, z per pixel), for saving.
+    pub fn normals(&self) -> Result<Plane<f32>, EngineError> {
+        let (mut w, mut h, mut sw, mut sh) = (0, 0, 0, 0);
+        let mut data: *const f32 = std::ptr::null();
+        // SAFETY: valid shape; outputs are writable.
+        status_to_result(unsafe { aibs_shape_normals(self.raw, &mut w, &mut h, &mut sw, &mut sh, &mut data) })?;
+        // SAFETY: the engine returned w * h * 3 floats valid while the shape lives.
+        let values = unsafe { std::slice::from_raw_parts(data, w as usize * h as usize * 3).to_vec() };
+        Ok(Plane { width: w, height: h, source_width: sw, source_height: sh, values })
+    }
+
+    /// A shape from saved surface directions.
+    pub fn from_normals(plane: &Plane<f32>) -> Result<Shape, EngineError> {
+        if plane.values.len() != plane.width as usize * plane.height as usize * 3 {
+            return Err(EngineError::InvalidArgument);
+        }
+        let mut raw: *mut ShapeRaw = std::ptr::null_mut();
+        // SAFETY: `values` has width * height * 3 floats; `raw` is writable.
+        status_to_result(unsafe {
+            aibs_shape_from_normals(
+                plane.values.as_ptr(),
+                plane.width,
+                plane.height,
+                plane.source_width,
+                plane.source_height,
+                &mut raw,
+            )
+        })?;
+        Ok(Shape { raw })
     }
 }
 
@@ -1071,5 +1195,28 @@ mod tests {
         let green = |image: &RgbaImage, x: usize, y: usize| image.pixels[(y * 64 + x) * 4 + 1];
         assert!(green(&lit, 6, 24) > green(&plain, 6, 24));
         assert_eq!(Shape::from_depth(&depth, 10, 10, 64, 48).unwrap_err(), EngineError::InvalidArgument);
+    }
+
+    #[test]
+    fn encodes_and_round_trips_analysis_results() {
+        let rgb: Vec<u8> = (0..16 * 8 * 3).map(|i| (i % 251) as u8).collect();
+        let jpeg = encode(&rgb, 16, 8, 3, ImageFormat::Jpeg { quality: 90 }).unwrap();
+        assert_eq!(&jpeg[..2], &[0xFF, 0xD8]);
+        let png = encode(&rgb, 16, 8, 3, ImageFormat::Png).unwrap();
+        assert_eq!(&png[1..4], b"PNG");
+        assert_eq!(decode_rgba8(&png, 0).unwrap().width, 16);
+        assert!(encode(&rgb, 16, 9, 3, ImageFormat::Png).is_err());
+
+        let matte = Matte::from_values(&[0, 64, 128, 255], 2, 2, 20, 20).unwrap();
+        let plane = matte.values().unwrap();
+        assert_eq!((plane.width, plane.source_width), (2, 20));
+        assert_eq!(plane.values, vec![0, 64, 128, 255]);
+
+        let depth: Vec<f32> = (0..16 * 12).map(|i| (i % 16) as f32).collect();
+        let shape = Shape::from_depth(&depth, 16, 12, 32, 24).unwrap();
+        let normals = shape.normals().unwrap();
+        let again = Shape::from_normals(&normals).unwrap().normals().unwrap();
+        assert_eq!(normals.width, again.width);
+        assert!(normals.values.iter().zip(&again.values).all(|(a, b)| (a - b).abs() < 1e-5));
     }
 }

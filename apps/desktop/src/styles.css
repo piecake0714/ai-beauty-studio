@@ -657,6 +657,83 @@ input:focus-visible {
   vertical-align: middle;
 }
 
+/* Files: title, dialogs, recovery */
+.doc-title {
+  margin-left: 16px;
+  overflow: hidden;
+  font-size: 0.9rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.dirty-dot {
+  color: var(--accent);
+}
+
+.small-dialog {
+  width: min(440px, 92vw);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.field legend {
+  margin-bottom: 6px;
+  padding: 0;
+}
+
+.note.warning {
+  color: var(--error-text);
+}
+
+.path-text {
+  word-break: break-all;
+}
+
+.recovery-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 16px 24px 0;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: var(--info-bg);
+  color: var(--info-text);
+}
+
+.recovery-card h2 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+}
+
+.recovery-card p {
+  margin: 0;
+}
+
+.badge {
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  background: var(--accent);
+  color: #ffffff;
+}
+
 /* Lighting */
 .light-handle {
   position: absolute;

@@ -19,6 +19,31 @@ export interface Settings {
   recent: RecentFile[];
 }
 
+/** Unsaved work kept from a session that ended unexpectedly. */
+export interface RecoveryInfo {
+  /** Seconds since the Unix epoch. */
+  savedAt: number;
+  projectPath: string | null;
+  originalPath: string;
+}
+
+export interface ExportOptions {
+  format: "jpeg" | "png";
+  /** JPEG quality 1–100. */
+  quality: number;
+  /** Longest side in pixels; null keeps the original size. */
+  longSide: number | null;
+}
+
+export interface DocumentStatus {
+  serial: number;
+  /** Where the original photo is. */
+  originalPath: string;
+  projectPath: string | null;
+  /** Background images a project refers to that could not be found. */
+  missingBackgrounds: number;
+}
+
 export interface FileInfo {
   name: string;
   sizeBytes: number;

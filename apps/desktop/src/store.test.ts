@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Api } from "./api";
 import { FRAME_HEADER_LEN } from "./frame";
-import { createAppStore, defaultSettings } from "./store";
+import { createAppStore, defaultSettings, documentKey, fileStem, type FileLabels } from "./store";
 import { NO_ADJUSTMENTS, type Adjustments, type EditorMode, type EditState, type LanguagePreference, type Settings, type ThemePreference } from "./types";
 
 function frameBuffer(width: number, height: number): ArrayBuffer {
@@ -21,6 +21,17 @@ function fakeApi(overrides: Partial<Api> = {}): Api {
   let states: Adjustments[] = [NO_ADJUSTMENTS];
   let index = 0;
   let serial = 0;
+  let openedPath = "";
+  let projectPath: string | null = null;
+  const openProjectLike = (path: string, original?: string | null) => {
+    if (path.includes("missing") && !original) return Promise.reject("original_missing");
+    openedPath = original ?? "C:\\照片\\a.jpg";
+    projectPath = path;
+    states = [NO_ADJUSTMENTS, { ...NO_ADJUSTMENTS, exposure: 1 }];
+    index = 1;
+    serial += 1;
+    return Promise.resolve(frameBuffer(4, 3));
+  };
   const editState = (): EditState => ({
     adjustments: states[index],
     canUndo: index > 0,
@@ -36,6 +47,8 @@ function fakeApi(overrides: Partial<Api> = {}): Api {
       states = [NO_ADJUSTMENTS];
       index = 0;
       serial += 1;
+      openedPath = path;
+      projectPath = null;
       return frameBuffer(4, 3);
     }),
     renderView: vi.fn(async () => frameBuffer(4, 3)),
@@ -56,6 +69,26 @@ function fakeApi(overrides: Partial<Api> = {}): Api {
       index = Math.min(states.length - 1, index + 1);
       return editState();
     }),
+    pickToOpen: vi.fn(async () => "C:\\照片\\a.jpg"),
+    pickSavePath: vi.fn(async (_name: string, extension: string) => `C:\\out\\saved.${extension}`),
+    openProject: vi.fn(openProjectLike),
+    inspectProject: vi.fn(async () => ({ originalPath: "D:\\old\\a.jpg", savedAt: 1 })),
+    documentStatus: vi.fn(async () => ({ serial, originalPath: openedPath, projectPath, missingBackgrounds: 0 })),
+    backgroundStatus: vi.fn(async () => ({ serial, ready: false, shapeReady: false })),
+    saveProject: vi.fn(async (path: string | null) => {
+      if (!path && !projectPath) return Promise.reject("needs_path");
+      projectPath = path ?? projectPath;
+      return projectPath as string;
+    }),
+    autosave: vi.fn(async () => undefined),
+    recoveryStatus: vi.fn(async () => null),
+    restoreRecovery: vi.fn(async (original?: string | null) => {
+      await openProjectLike("C:\\recovery.aibs", original ?? "C:\\照片\\a.jpg");
+      projectPath = null;
+      return frameBuffer(4, 3);
+    }),
+    discardRecovery: vi.fn(async () => undefined),
+    exportImage: vi.fn(async () => 9),
     startBackgroundSeparation: vi.fn(async () => 7),
     startShapeEstimation: vi.fn(async () => 8),
     addBackgroundImage: vi.fn(async () => 1),
@@ -427,5 +460,149 @@ describe("app store", () => {
     expect(store.getState().live.lightSubjectOnly).toBe(true);
     await store.getState().undo();
     expect(store.getState().live.lightSubjectOnly).toBe(false);
+  });
+
+  const labels: FileLabels = { supported: "S", images: "I", projects: "P", jpeg: "J", png: "N" };
+
+  it("tracks unsaved changes and saves a project, asking where only the first time", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    await store.getState().openPath("C:\\照片\\a.jpg");
+    expect(store.getState().isDirty()).toBe(false);
+    store.getState().setLive({ ...store.getState().live, contrast: 20 });
+    await store.getState().commitLive();
+    expect(store.getState().isDirty()).toBe(true);
+
+    expect(await store.getState().saveProject(labels)).toBe(true);
+    expect(api.pickSavePath).toHaveBeenCalledWith("P", "aibs", "C:\\照片\\a.aibs");
+    expect(api.saveProject).toHaveBeenCalledWith("C:\\out\\saved.aibs");
+    expect(store.getState().projectPath).toBe("C:\\out\\saved.aibs");
+    expect(store.getState().isDirty()).toBe(false);
+
+    await store.getState().undo();
+    expect(store.getState().isDirty()).toBe(true);
+    await store.getState().redo();
+    expect(store.getState().isDirty()).toBe(false); // back to what was saved
+
+    store.getState().setLive({ ...store.getState().live, contrast: 40 });
+    await store.getState().commitLive();
+    await store.getState().saveProject(labels);
+    expect(api.pickSavePath).toHaveBeenCalledTimes(1);
+    expect(api.saveProject).toHaveBeenLastCalledWith(null);
+    // "Save as" asks again.
+    await store.getState().saveProject(labels, true);
+    expect(api.pickSavePath).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks before discarding only when there are unsaved changes", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    const prompt = { title: "t", message: "m", yes: "y", no: "n" };
+    await store.getState().openPath("C:\\照片\\a.jpg");
+    store.getState().setLive({ ...store.getState().live, contrast: 20 });
+    await store.getState().commitLive();
+    await store.getState().saveProject(labels);
+    expect(await store.getState().confirmDiscard(prompt)).toBe(true);
+    expect(api.confirm).not.toHaveBeenCalled(); // saved: nothing to lose
+    store.getState().setLive({ ...store.getState().live, contrast: 30 });
+    await store.getState().commitLive();
+    await store.getState().confirmDiscard(prompt);
+    expect(api.confirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens a project with its photo, edits and no unsaved changes", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    await store.getState().openPath("C:\\work\\portrait.aibs");
+    const state = store.getState();
+    expect(api.openProject).toHaveBeenCalledWith("C:\\work\\portrait.aibs", null);
+    expect(api.openImage).not.toHaveBeenCalled();
+    expect(state.document?.path).toBe("C:\\照片\\a.jpg");
+    expect(state.projectPath).toBe("C:\\work\\portrait.aibs");
+    expect(state.live.exposure).toBe(1);
+    expect(state.isDirty()).toBe(false);
+    expect(api.renderOverview).toHaveBeenCalled(); // the overview shows the edits
+  });
+
+  it("asks for a project's missing photo and opens it once pointed to", async () => {
+    const api = fakeApi({ pickImage: vi.fn(async () => "E:\\moved\\a.jpg") });
+    const store = createAppStore(api);
+    await store.getState().openPath("C:\\work\\missing.aibs");
+    expect(store.getState().document).toBeNull();
+    expect(store.getState().error).toBeNull();
+    expect(store.getState().pendingLocate).toEqual({
+      projectPath: "C:\\work\\missing.aibs",
+      expected: "D:\\old\\a.jpg",
+      reason: "original_missing",
+    });
+    await store.getState().locateOriginal("Images");
+    expect(api.openProject).toHaveBeenLastCalledWith("C:\\work\\missing.aibs", "E:\\moved\\a.jpg");
+    expect(store.getState().pendingLocate).toBeNull();
+    expect(store.getState().document?.path).toBe("E:\\moved\\a.jpg");
+
+    await store.getState().openPath("C:\\work\\missing.aibs");
+    store.getState().cancelLocate();
+    expect(store.getState().pendingLocate).toBeNull();
+  });
+
+  it("offers recovered work at startup and restores it as unsaved", async () => {
+    const info = { savedAt: 100, projectPath: null, originalPath: "C:\\照片\\a.jpg" };
+    const api = fakeApi({ recoveryStatus: vi.fn(async () => info) });
+    const store = createAppStore(api);
+    await store.getState().init();
+    expect(store.getState().recovery).toEqual(info);
+    await store.getState().restoreRecovery();
+    expect(store.getState().document?.path).toBe("C:\\照片\\a.jpg");
+    expect(store.getState().recovery).toBeNull();
+    expect(store.getState().isDirty()).toBe(true);
+
+    const store2 = createAppStore(fakeApi({ recoveryStatus: vi.fn(async () => info) }));
+    await store2.getState().init();
+    await store2.getState().discardRecovery();
+    expect(store2.getState().recovery).toBeNull();
+  });
+
+  it("saves for recovery only when there are unsaved changes", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    await store.getState().openPath("C:\\照片\\a.jpg");
+    await store.getState().autosave();
+    expect(api.autosave).not.toHaveBeenCalled();
+    store.getState().setLive({ ...store.getState().live, contrast: 20 });
+    await store.getState().commitLive();
+    await store.getState().autosave();
+    expect(api.autosave).toHaveBeenCalledTimes(1);
+  });
+
+  it("exports through a job and reports the result", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    await store.getState().openPath("C:\\照片\\a.jpg");
+    const options = { format: "jpeg" as const, quality: 92, longSide: null };
+    await store.getState().exportImage(options, labels);
+    expect(api.pickSavePath).toHaveBeenCalledWith("J", "jpg", "C:\\照片\\a-edited.jpg");
+    expect(api.exportImage).toHaveBeenCalledWith("C:\\out\\saved.jpg", options);
+    expect(store.getState().exporting).toMatchObject({ state: "running", jobId: 9 });
+    store.getState().receiveJobUpdate({ state: "progress", id: 9, fraction: 0.6, stage: "encode" });
+    expect(store.getState().exporting).toMatchObject({ fraction: 0.6 });
+    store.getState().receiveJobUpdate({
+      state: "finished",
+      id: 9,
+      result: { path: "C:\\out\\saved.jpg", width: 40, height: 30 },
+    });
+    expect(store.getState().exporting).toEqual({ state: "done", path: "C:\\out\\saved.jpg", width: 40, height: 30 });
+    store.getState().dismissExport();
+    expect(store.getState().exporting).toBeNull();
+
+    const refusing = createAppStore(fakeApi({ exportImage: vi.fn(async () => Promise.reject("export_would_overwrite_original")) }));
+    await refusing.getState().openPath("C:\\照片\\a.jpg");
+    await refusing.getState().exportImage(options, labels);
+    expect(refusing.getState().exporting).toEqual({ state: "failed", code: "export_would_overwrite_original" });
+  });
+
+  it("names files from paths", () => {
+    expect(fileStem("C:\\照片\\my.photo.jpg")).toBe("my.photo");
+    expect(fileStem("/home/a/b")).toBe("b");
+    expect(documentKey({ edit: null, background: null, shape: null })).toContain("false");
   });
 });

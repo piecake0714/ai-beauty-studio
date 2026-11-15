@@ -1,0 +1,628 @@
+//! The .aibs project format.
+//!
+//! A project is a ZIP container (stored entries; images inside are already
+//! compressed) holding:
+//!
+//! - `project.json`: format name and version, the original image's
+//!   reference (path, path relative to the project, size, SHA-256), the
+//!   undo history of adjustments, detected faces, replacement background
+//!   images and the names of the entries below;
+//! - `masks/subject.png`: subject/background separation (8-bit grey);
+//! - `shape/normals.png`: 3D shape for lighting (surface directions as RGB);
+//! - `preview.jpg`: a small preview of the edited image.
+//!
+//! The original image is referenced, never copied or changed. Older format
+//! versions are migrated when read; newer ones are refused with a clear
+//! error rather than misread.
+
+use std::fs::File;
+use std::io::{self, Read, Seek, Write};
+use std::path::{Path, PathBuf};
+
+use engine_sys::{Face, ImageFormat, Matte, Plane, RgbaImage, Shape};
+use serde::{Deserialize, Serialize};
+use zip::write::SimpleFileOptions;
+use zip::{CompressionMethod, ZipArchive, ZipWriter};
+
+use crate::document::{Adjustments, History};
+use crate::files::{self, FileRef, Located};
+
+/// File name extension of projects.
+pub const EXTENSION: &str = "aibs";
+/// Identifies the file as an AI Beauty Studio project.
+pub const FORMAT_NAME: &str = "ai-beauty-studio-project";
+/// The version this build writes. Readers accept this and older versions.
+pub const FORMAT_VERSION: u32 = 1;
+
+const PROJECT_ENTRY: &str = "project.json";
+const MATTE_ENTRY: &str = "masks/subject.png";
+const SHAPE_ENTRY: &str = "shape/normals.png";
+const PREVIEW_ENTRY: &str = "preview.jpg";
+
+/// True when `path` names a project file (by extension).
+pub fn is_project_path(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case(EXTENSION))
+}
+
+/// Why a project could not be read or written. `code()` is the stable
+/// identifier the UI maps to a message.
+#[derive(Debug)]
+pub enum ProjectError {
+    NotFound,
+    /// Not a project file at all.
+    NotAProject,
+    /// Written by a newer version of the app.
+    NewerVersion(u32),
+    /// A project, but parts of it are damaged.
+    Damaged(String),
+    /// The original photo is not where the project says.
+    OriginalMissing(String),
+    /// A different file is where the original photo should be.
+    OriginalChanged(String),
+    Io(io::Error),
+}
+
+impl ProjectError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            ProjectError::NotFound => "not_found",
+            ProjectError::NotAProject => "not_a_project",
+            ProjectError::NewerVersion(_) => "project_newer_version",
+            ProjectError::Damaged(_) => "project_damaged",
+            ProjectError::OriginalMissing(_) => "original_missing",
+            ProjectError::OriginalChanged(_) => "original_changed",
+            ProjectError::Io(_) => "project_io_failed",
+        }
+    }
+}
+
+impl std::fmt::Display for ProjectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProjectError::NotFound => f.write_str("the project file does not exist"),
+            ProjectError::NotAProject => f.write_str("not an AI Beauty Studio project"),
+            ProjectError::NewerVersion(v) => write!(f, "project format version {v} is newer than this app"),
+            ProjectError::Damaged(what) => write!(f, "the project is damaged: {what}"),
+            ProjectError::OriginalMissing(path) => write!(f, "the original photo is missing: {path}"),
+            ProjectError::OriginalChanged(path) => write!(f, "a different file is at {path}"),
+            ProjectError::Io(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for ProjectError {}
+
+impl From<io::Error> for ProjectError {
+    fn from(e: io::Error) -> Self {
+        ProjectError::Io(e)
+    }
+}
+
+/// A face as saved.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FaceRecord {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub landmarks: [f32; 10],
+    pub score: f32,
+    pub skin: [f32; 5],
+}
+
+impl From<&Face> for FaceRecord {
+    fn from(f: &Face) -> Self {
+        FaceRecord {
+            x: f.x,
+            y: f.y,
+            width: f.width,
+            height: f.height,
+            landmarks: f.landmarks,
+            score: f.score,
+            skin: f.skin,
+        }
+    }
+}
+
+impl From<&FaceRecord> for Face {
+    fn from(f: &FaceRecord) -> Self {
+        Face {
+            x: f.x,
+            y: f.y,
+            width: f.width,
+            height: f.height,
+            landmarks: f.landmarks,
+            score: f.score,
+            skin: f.skin,
+        }
+    }
+}
+
+/// An image entry inside the container and the plane it holds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaneEntry {
+    pub entry: String,
+    pub width: u32,
+    pub height: u32,
+    pub source_width: u32,
+    pub source_height: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedHistory {
+    pub states: Vec<Adjustments>,
+    pub index: usize,
+}
+
+/// `project.json`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectFile {
+    pub format: String,
+    pub version: u32,
+    pub app_version: String,
+    /// Seconds since the Unix epoch.
+    pub saved_at: u64,
+    pub original: FileRef,
+    pub image_width: u32,
+    pub image_height: u32,
+    pub history: SavedHistory,
+    /// None when detection had not finished.
+    #[serde(default)]
+    pub faces: Option<Vec<FaceRecord>>,
+    #[serde(default)]
+    pub matte: Option<PlaneEntry>,
+    #[serde(default)]
+    pub shape: Option<PlaneEntry>,
+    /// Replacement background images; number n in the adjustments is
+    /// element n - 1.
+    #[serde(default)]
+    pub background_images: Vec<FileRef>,
+    #[serde(default)]
+    pub preview: Option<String>,
+}
+
+/// What to save: the open document's state.
+pub struct Snapshot<'a> {
+    pub original: &'a FileRef,
+    pub image_size: (u32, u32),
+    pub history: &'a History,
+    pub faces: Option<&'a [Face]>,
+    pub matte: Option<&'a Matte>,
+    pub shape: Option<&'a Shape>,
+    pub background_images: &'a [FileRef],
+    /// A small rendering of the edited image (RGBA).
+    pub preview: Option<&'a RgbaImage>,
+    pub saved_at: u64,
+}
+
+fn engine_error(what: &str) -> impl Fn(engine_sys::EngineError) -> ProjectError + '_ {
+    move |e| ProjectError::Damaged(format!("{what}: {e}"))
+}
+
+fn rgb_of(image: &RgbaImage) -> Vec<u8> {
+    image.pixels.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect()
+}
+
+/// Write `snapshot` to `path` as a project. The file is replaced only once
+/// the new one is complete.
+pub fn save(path: &Path, snapshot: &Snapshot) -> Result<(), ProjectError> {
+    let project_dir = path.parent().filter(|d| !d.as_os_str().is_empty());
+    let relative = |r: &FileRef| project_dir.map_or_else(|| r.clone(), |d| r.relative_to(d));
+
+    let mut entries: Vec<(&str, Vec<u8>)> = Vec::new();
+    let matte = match snapshot.matte {
+        Some(m) => {
+            let plane = m.values().map_err(engine_error("subject mask"))?;
+            let png = engine_sys::encode(&plane.values, plane.width, plane.height, 1, ImageFormat::Png)
+                .map_err(engine_error("subject mask"))?;
+            entries.push((MATTE_ENTRY, png));
+            Some(plane_entry(MATTE_ENTRY, &plane))
+        }
+        None => None,
+    };
+    let shape = match snapshot.shape {
+        Some(s) => {
+            let plane = s.normals().map_err(engine_error("3D shape"))?;
+            // Directions -1..1 as 0..255 per channel.
+            let bytes: Vec<u8> = plane.values.iter().map(|v| ((v.clamp(-1.0, 1.0) + 1.0) * 127.5).round() as u8).collect();
+            let png = engine_sys::encode(&bytes, plane.width, plane.height, 3, ImageFormat::Png)
+                .map_err(engine_error("3D shape"))?;
+            entries.push((SHAPE_ENTRY, png));
+            Some(plane_entry(SHAPE_ENTRY, &plane))
+        }
+        None => None,
+    };
+    let preview = match snapshot.preview {
+        Some(image) => {
+            let jpeg = engine_sys::encode(
+                &rgb_of(image),
+                image.width,
+                image.height,
+                3,
+                ImageFormat::Jpeg { quality: 85 },
+            )
+            .map_err(engine_error("preview"))?;
+            entries.push((PREVIEW_ENTRY, jpeg));
+            Some(PREVIEW_ENTRY.to_string())
+        }
+        None => None,
+    };
+    let (states, index) = snapshot.history.parts();
+    let file = ProjectFile {
+        format: FORMAT_NAME.to_string(),
+        version: FORMAT_VERSION,
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        saved_at: snapshot.saved_at,
+        original: relative(snapshot.original),
+        image_width: snapshot.image_size.0,
+        image_height: snapshot.image_size.1,
+        history: SavedHistory { states: states.to_vec(), index },
+        faces: snapshot.faces.map(|faces| faces.iter().map(FaceRecord::from).collect()),
+        matte,
+        shape,
+        background_images: snapshot.background_images.iter().map(relative).collect(),
+        preview,
+    };
+    let json = serde_json::to_vec_pretty(&file).map_err(io::Error::other)?;
+
+    files::write_atomically_with(path, |out| {
+        let mut zip = ZipWriter::new(out);
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        zip.start_file(PROJECT_ENTRY, options).map_err(io::Error::other)?;
+        zip.write_all(&json)?;
+        for (name, bytes) in &entries {
+            zip.start_file(*name, options).map_err(io::Error::other)?;
+            zip.write_all(bytes)?;
+        }
+        zip.finish().map_err(io::Error::other)?;
+        Ok(())
+    })?;
+    Ok(())
+}
+
+fn plane_entry<T>(entry: &str, plane: &Plane<T>) -> PlaneEntry {
+    PlaneEntry {
+        entry: entry.to_string(),
+        width: plane.width,
+        height: plane.height,
+        source_width: plane.source_width,
+        source_height: plane.source_height,
+    }
+}
+
+fn open_archive(path: &Path) -> Result<ZipArchive<File>, ProjectError> {
+    let file = File::open(path).map_err(|e| match e.kind() {
+        io::ErrorKind::NotFound => ProjectError::NotFound,
+        _ => ProjectError::Io(e),
+    })?;
+    ZipArchive::new(file).map_err(|_| ProjectError::NotAProject)
+}
+
+fn read_entry<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str) -> Result<Vec<u8>, ProjectError> {
+    let mut entry = archive
+        .by_name(name)
+        .map_err(|_| ProjectError::Damaged(format!("{name} is missing")))?;
+    let mut bytes = Vec::with_capacity(entry.size() as usize);
+    entry
+        .read_to_end(&mut bytes)
+        .map_err(|e| ProjectError::Damaged(format!("{name}: {e}")))?;
+    Ok(bytes)
+}
+
+/// Turn any supported version's `project.json` into the current form.
+pub fn migrate(value: serde_json::Value) -> Result<ProjectFile, ProjectError> {
+    if value.get("format").and_then(|f| f.as_str()) != Some(FORMAT_NAME) {
+        return Err(ProjectError::NotAProject);
+    }
+    let version = value
+        .get("version")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| ProjectError::Damaged("no format version".into()))? as u32;
+    if version > FORMAT_VERSION {
+        return Err(ProjectError::NewerVersion(version));
+    }
+    // Version 1 is the current form. Later versions add a step here that
+    // rewrites the previous version's JSON into the next one.
+    let mut file: ProjectFile =
+        serde_json::from_value(value).map_err(|e| ProjectError::Damaged(format!("project.json: {e}")))?;
+    file.version = FORMAT_VERSION;
+    Ok(file)
+}
+
+/// Read only `project.json` (for showing what a project refers to).
+pub fn inspect(path: &Path) -> Result<ProjectFile, ProjectError> {
+    let mut archive = open_archive(path)?;
+    let json = read_entry(&mut archive, PROJECT_ENTRY).map_err(|_| ProjectError::NotAProject)?;
+    let value: serde_json::Value = serde_json::from_slice(&json).map_err(|_| ProjectError::NotAProject)?;
+    migrate(value)
+}
+
+/// The project's preview image (JPEG bytes), if it has one.
+pub fn read_preview(path: &Path) -> Result<Vec<u8>, ProjectError> {
+    let mut archive = open_archive(path)?;
+    read_entry(&mut archive, PREVIEW_ENTRY)
+}
+
+/// A replacement background image the project refers to, and where it was
+/// found (None when it is missing; edits using it then show the original
+/// background).
+#[derive(Debug, Clone)]
+pub struct BackgroundRef {
+    pub file: FileRef,
+    pub found: Option<PathBuf>,
+}
+
+/// A project read back.
+pub struct Loaded {
+    pub file: ProjectFile,
+    /// Where the original photo was found.
+    pub original_path: PathBuf,
+    pub history: History,
+    pub faces: Option<Vec<Face>>,
+    pub matte: Option<Matte>,
+    pub shape: Option<Shape>,
+    pub background_images: Vec<BackgroundRef>,
+}
+
+/// Read the project at `path`. The original photo is looked for where the
+/// project says (absolute, then relative to the project), or at
+/// `original_override` when the user has pointed to it; in every case it
+/// must be the same file (size and SHA-256).
+pub fn load(path: &Path, original_override: Option<&Path>) -> Result<Loaded, ProjectError> {
+    let mut archive = open_archive(path)?;
+    let json = read_entry(&mut archive, PROJECT_ENTRY).map_err(|_| ProjectError::NotAProject)?;
+    let value: serde_json::Value = serde_json::from_slice(&json).map_err(|_| ProjectError::NotAProject)?;
+    let file = migrate(value)?;
+    let project_dir = path.parent();
+
+    let original_path = match original_override {
+        Some(chosen) => match file.original.matches(chosen) {
+            Ok(true) => chosen.to_path_buf(),
+            Ok(false) => return Err(ProjectError::OriginalChanged(chosen.to_string_lossy().into_owned())),
+            Err(_) => return Err(ProjectError::OriginalMissing(chosen.to_string_lossy().into_owned())),
+        },
+        None => match files::locate(&file.original, project_dir) {
+            Located::Found(found) => found,
+            Located::Changed(at) => return Err(ProjectError::OriginalChanged(at.to_string_lossy().into_owned())),
+            Located::Missing => return Err(ProjectError::OriginalMissing(file.original.path.clone())),
+        },
+    };
+
+    let matte = match &file.matte {
+        Some(entry) => {
+            let png = read_entry(&mut archive, &entry.entry)?;
+            let image = engine_sys::decode_rgba8(&png, 0).map_err(engine_error("subject mask"))?;
+            check_size(entry, &image)?;
+            let values: Vec<u8> = image.pixels.chunks_exact(4).map(|p| p[0]).collect();
+            Some(
+                Matte::from_values(&values, entry.width, entry.height, entry.source_width, entry.source_height)
+                    .map_err(engine_error("subject mask"))?,
+            )
+        }
+        None => None,
+    };
+    let shape = match &file.shape {
+        Some(entry) => {
+            let png = read_entry(&mut archive, &entry.entry)?;
+            let image = engine_sys::decode_rgba8(&png, 0).map_err(engine_error("3D shape"))?;
+            check_size(entry, &image)?;
+            let values: Vec<f32> = image
+                .pixels
+                .chunks_exact(4)
+                .flat_map(|p| [p[0], p[1], p[2]].map(|v| v as f32 / 127.5 - 1.0))
+                .collect();
+            Some(
+                Shape::from_normals(&Plane {
+                    width: entry.width,
+                    height: entry.height,
+                    source_width: entry.source_width,
+                    source_height: entry.source_height,
+                    values,
+                })
+                .map_err(engine_error("3D shape"))?,
+            )
+        }
+        None => None,
+    };
+    let background_images = file
+        .background_images
+        .iter()
+        .map(|reference| BackgroundRef {
+            file: reference.clone(),
+            found: match files::locate(reference, project_dir) {
+                Located::Found(p) => Some(p),
+                _ => None,
+            },
+        })
+        .collect();
+    Ok(Loaded {
+        history: History::from_parts(file.history.states.clone(), file.history.index),
+        faces: file.faces.as_ref().map(|faces| faces.iter().map(Face::from).collect()),
+        original_path,
+        matte,
+        shape,
+        background_images,
+        file,
+    })
+}
+
+fn check_size(entry: &PlaneEntry, image: &RgbaImage) -> Result<(), ProjectError> {
+    if image.width != entry.width || image.height != entry.height {
+        return Err(ProjectError::Damaged(format!("{} has the wrong size", entry.entry)));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::files::tests::scratch;
+    use std::fs;
+
+    const PNG: &[u8] = include_bytes!("../../../tests/fixtures/gradient_64x48.png");
+
+    struct Fixture {
+        dir: PathBuf,
+        original: PathBuf,
+        reference: FileRef,
+    }
+
+    fn fixture(name: &str) -> Fixture {
+        let dir = scratch(name);
+        let original = dir.join("photos").join("相片 1.png");
+        fs::create_dir_all(original.parent().unwrap()).unwrap();
+        fs::write(&original, PNG).unwrap();
+        let reference = FileRef::of(&original).unwrap();
+        Fixture { dir, original, reference }
+    }
+
+    fn edited_history() -> History {
+        let mut history = History::default();
+        history.commit(Adjustments { exposure: 0.5, ..Default::default() });
+        history.commit(Adjustments { exposure: 0.5, skin_smoothing: 40.0, ..Default::default() });
+        history.undo();
+        history
+    }
+
+    fn snapshot<'a>(f: &'a Fixture, history: &'a History, preview: Option<&'a RgbaImage>) -> Snapshot<'a> {
+        Snapshot {
+            original: &f.reference,
+            image_size: (64, 48),
+            history,
+            faces: None,
+            matte: None,
+            shape: None,
+            background_images: &[],
+            preview,
+            saved_at: 1_700_000_000,
+        }
+    }
+
+    #[test]
+    fn saves_and_restores_everything() {
+        let f = fixture("project-roundtrip");
+        let history = edited_history();
+        let face = Face { x: 1.0, y: 2.0, width: 30.0, height: 40.0, score: 0.9, ..Default::default() };
+        let matte = Matte::from_values(&(0..=255u8).collect::<Vec<_>>(), 16, 16, 64, 48).unwrap();
+        let depth: Vec<f32> = (0..32 * 24).map(|i| (i % 32) as f32).collect();
+        let shape = Shape::from_depth(&depth, 32, 24, 64, 48).unwrap();
+        let backdrop = f.dir.join("photos").join("back.png");
+        fs::write(&backdrop, PNG).unwrap();
+        let backgrounds = [FileRef::of(&backdrop).unwrap()];
+        let preview = engine_sys::Source::open(PNG).unwrap().render_fit(32).unwrap();
+        let path = f.dir.join("projects").join("我的專案.aibs");
+        let snap = Snapshot {
+            faces: Some(std::slice::from_ref(&face)),
+            matte: Some(&matte),
+            shape: Some(&shape),
+            background_images: &backgrounds,
+            ..snapshot(&f, &history, Some(&preview))
+        };
+        save(&path, &snap).unwrap();
+        assert!(is_project_path(&path));
+
+        let loaded = load(&path, None).unwrap();
+        assert_eq!(loaded.original_path, f.original);
+        assert_eq!(loaded.history.state(), history.state());
+        assert_eq!(loaded.history.parts().0.len(), 3);
+        assert_eq!(loaded.faces.as_deref(), Some(&[face][..]));
+        assert_eq!(loaded.matte.unwrap().values().unwrap(), matte.values().unwrap());
+        let normals = shape.normals().unwrap();
+        let restored = loaded.shape.unwrap().normals().unwrap();
+        assert_eq!((restored.width, restored.source_width), (normals.width, normals.source_width));
+        let worst = normals.values.iter().zip(&restored.values).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+        assert!(worst < 0.02, "normals within 8-bit precision, worst {worst}");
+        assert_eq!(loaded.background_images[0].found.as_deref(), Some(backdrop.as_path()));
+        assert_eq!(loaded.file.original.relative_path.as_deref().map(Path::new), Some(Path::new("../photos/相片 1.png")));
+        assert_eq!(&read_preview(&path).unwrap()[..2], &[0xFF, 0xD8]);
+        assert_eq!(inspect(&path).unwrap().saved_at, 1_700_000_000);
+        // The original photo is untouched.
+        assert_eq!(fs::read(&f.original).unwrap(), PNG);
+    }
+
+    #[test]
+    fn finds_a_moved_original_or_asks_for_it() {
+        let f = fixture("project-moved");
+        let history = History::default();
+        let path = f.dir.join("p.aibs");
+        save(&path, &snapshot(&f, &history, None)).unwrap();
+
+        let elsewhere = f.dir.join("elsewhere.png");
+        fs::rename(&f.original, &elsewhere).unwrap();
+        match load(&path, None) {
+            Err(ProjectError::OriginalMissing(p)) => assert!(p.ends_with("相片 1.png")),
+            other => panic!("expected original_missing, got {:?}", other.err().map(|e| e.code())),
+        }
+        // The user points to it.
+        assert_eq!(load(&path, Some(&elsewhere)).unwrap().original_path, elsewhere);
+        // A different photo is refused.
+        let other = f.dir.join("other.png");
+        fs::write(&other, b"not the same photo").unwrap();
+        assert_eq!(load(&path, Some(&other)).err().unwrap().code(), "original_changed");
+        fs::write(&f.original, b"replaced").unwrap();
+        assert_eq!(load(&path, None).err().unwrap().code(), "original_changed");
+    }
+
+    #[test]
+    fn refuses_other_files_newer_versions_and_damage() {
+        let f = fixture("project-bad");
+        let history = History::default();
+        let not_zip = f.dir.join("photo.aibs");
+        fs::write(&not_zip, PNG).unwrap();
+        assert_eq!(load(&not_zip, None).err().unwrap().code(), "not_a_project");
+        assert_eq!(load(&f.dir.join("none.aibs"), None).err().unwrap().code(), "not_found");
+
+        let mut value = serde_json::to_value(ProjectFile {
+            format: FORMAT_NAME.into(),
+            version: FORMAT_VERSION + 1,
+            app_version: "9".into(),
+            saved_at: 0,
+            original: f.reference.clone(),
+            image_width: 64,
+            image_height: 48,
+            history: SavedHistory { states: vec![Adjustments::default()], index: 0 },
+            faces: None,
+            matte: None,
+            shape: None,
+            background_images: vec![],
+            preview: None,
+        })
+        .unwrap();
+        assert_eq!(migrate(value.clone()).err().unwrap().code(), "project_newer_version");
+        value["format"] = "something-else".into();
+        assert_eq!(migrate(value).err().unwrap().code(), "not_a_project");
+
+        // A project whose mask entry is missing is reported as damaged.
+        let path = f.dir.join("damaged.aibs");
+        let matte = Matte::from_values(&[255; 4], 2, 2, 64, 48).unwrap();
+        save(&path, &Snapshot { matte: Some(&matte), ..snapshot(&f, &history, None) }).unwrap();
+        let mut archive = ZipArchive::new(File::open(&path).unwrap()).unwrap();
+        let json = read_entry(&mut archive, PROJECT_ENTRY).unwrap();
+        let broken = f.dir.join("broken.aibs");
+        let mut zip = ZipWriter::new(File::create(&broken).unwrap());
+        zip.start_file(PROJECT_ENTRY, SimpleFileOptions::default().compression_method(CompressionMethod::Stored))
+            .unwrap();
+        zip.write_all(&json).unwrap();
+        zip.finish().unwrap();
+        assert_eq!(load(&broken, None).err().unwrap().code(), "project_damaged");
+    }
+
+    #[test]
+    fn missing_background_images_do_not_stop_loading() {
+        let f = fixture("project-backdrop");
+        let history = History::default();
+        let backdrop = f.dir.join("back.png");
+        fs::write(&backdrop, PNG).unwrap();
+        let backgrounds = [FileRef::of(&backdrop).unwrap()];
+        let path = f.dir.join("p.aibs");
+        save(&path, &Snapshot { background_images: &backgrounds, ..snapshot(&f, &history, None) }).unwrap();
+        fs::remove_file(&backdrop).unwrap();
+        let loaded = load(&path, None).unwrap();
+        assert_eq!(loaded.background_images.len(), 1);
+        assert!(loaded.background_images[0].found.is_none());
+    }
+}

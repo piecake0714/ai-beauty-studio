@@ -10,3 +10,6 @@ engine-sys = { path = "../engine-sys" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+# Project files are ZIP containers; stored entries only (images are
+# already compressed), so no compression libraries are needed.
+zip = { version = "2", default-features = false }

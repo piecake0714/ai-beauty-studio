@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { EditorView } from "./components/EditorView";
+import { ExportDialog } from "./components/ExportDialog";
 import { HomeView } from "./components/HomeView";
+import { LocateDialog } from "./components/LocateDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { TopBar } from "./components/TopBar";
-import { useApp, useDiscardPrompt, useI18n } from "./context";
+import { useApp, useDiscardPrompt, useFileLabels, useI18n } from "./context";
 import { resolveTheme } from "./format";
 import { errorMessage } from "./i18n";
+import { documentKey } from "./store";
+
+/** How long after the last change unsaved work is saved for recovery. */
+const AUTOSAVE_DELAY_MS = 15_000;
 
 const darkQuery = "(prefers-color-scheme: dark)";
 
@@ -33,7 +39,13 @@ export function App() {
   const error = useApp((s) => s.error);
   const settingsRecovered = useApp((s) => s.settingsRecovered);
   const init = useApp((s) => s.init);
-  const pickAndOpen = useApp((s) => s.pickAndOpen);
+  const pickToOpen = useApp((s) => s.pickToOpen);
+  const saveProject = useApp((s) => s.saveProject);
+  const autosave = useApp((s) => s.autosave);
+  const hasDocument = useApp((s) => s.document !== null);
+  const dirtyKey = useApp((s) => (s.document && s.savedKey !== documentKey(s) ? `${s.document.id}|${documentKey(s)}` : null));
+  const labels = useFileLabels();
+  const [exportOpen, setExportOpen] = useState(false);
   const dismissError = useApp((s) => s.dismissError);
   const dismissRecovered = useApp((s) => s.dismissRecovered);
   const zoomStep = useApp((s) => s.zoomStep);
@@ -101,7 +113,17 @@ export function App() {
       const key = event.key.toLowerCase();
       if (key === "o" && !event.shiftKey) {
         event.preventDefault();
-        void pickAndOpen(t("imageFiles"), openPrompt);
+        void pickToOpen(labels, openPrompt);
+        return;
+      }
+      if (key === "s" && hasDocument) {
+        event.preventDefault();
+        void saveProject(labels, event.shiftKey);
+        return;
+      }
+      if (key === "e" && hasDocument && !event.shiftKey) {
+        event.preventDefault();
+        setExportOpen(true);
         return;
       }
       if (view !== "editor") return;
@@ -132,7 +154,29 @@ export function App() {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [pickAndOpen, t, view, settingsOpen, fitToView, zoomTo, zoomStep, undo, redo, setHoldOriginal, openPrompt]);
+  }, [
+    pickToOpen,
+    saveProject,
+    labels,
+    hasDocument,
+    view,
+    settingsOpen,
+    fitToView,
+    zoomTo,
+    zoomStep,
+    undo,
+    redo,
+    setHoldOriginal,
+    openPrompt,
+  ]);
+
+  // Automatic recovery: unsaved changes are saved in the background a
+  // little after the last change.
+  useEffect(() => {
+    if (!dirtyKey) return;
+    const timer = window.setTimeout(() => void autosave(), AUTOSAVE_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [dirtyKey, autosave]);
 
   // Ask before closing the window would discard adjustments.
   const closePromptRef = useRef(closePrompt);
@@ -159,7 +203,7 @@ export function App() {
 
   return (
     <div className="app">
-      <TopBar onOpenSettings={() => setSettingsOpen(true)} />
+      <TopBar onOpenSettings={() => setSettingsOpen(true)} onExport={() => setExportOpen(true)} />
       {settingsRecovered && (
         <div className="banner" role="status">
           <span>{t("settings.recovered")}</span>
@@ -178,6 +222,8 @@ export function App() {
       )}
       {view === "editor" ? <EditorView /> : <HomeView />}
       {settingsOpen && <SettingsDialog onClose={closeSettings} />}
+      {exportOpen && hasDocument && <ExportDialog onClose={() => setExportOpen(false)} />}
+      <LocateDialog />
     </div>
   );
 }

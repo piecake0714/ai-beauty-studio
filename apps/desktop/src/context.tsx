@@ -1,7 +1,7 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { resolveLanguage, translate, type Language, type MessageKey } from "./i18n";
-import type { AppState, AppStore, DiscardPrompt } from "./store";
+import type { AppState, AppStore, DiscardPrompt, FileLabels } from "./store";
 
 const StoreContext = createContext<AppStore | null>(null);
 
@@ -29,6 +29,21 @@ export function useI18n(): { language: Language; t: Translate } {
     const language = resolveLanguage(preference, navigator.language);
     return { language, t: (key, values) => translate(language, key, values) };
   }, [preference]);
+}
+
+/** Labels for file dialogs, in the UI language. */
+export function useFileLabels(): FileLabels {
+  const { t } = useI18n();
+  return useMemo(
+    () => ({
+      supported: t("files.supported"),
+      images: t("imageFiles"),
+      projects: t("files.projects"),
+      jpeg: t("files.jpeg"),
+      png: t("files.png"),
+    }),
+    [t],
+  );
 }
 
 /** Question asked before unsaved adjustments are lost. */

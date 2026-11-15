@@ -315,6 +315,28 @@ impl History {
         true
     }
 
+    /// All recorded steps and the current position, for saving.
+    pub fn parts(&self) -> (&[Adjustments], usize) {
+        (&self.states, self.index)
+    }
+
+    /// History restored from saved steps. Values are clamped; an empty list
+    /// or a position past the end is repaired rather than refused, and
+    /// only the newest steps are kept beyond the limit.
+    pub fn from_parts(states: Vec<Adjustments>, index: usize) -> History {
+        let mut states: Vec<Adjustments> = states.into_iter().map(Adjustments::clamped).collect();
+        if states.is_empty() {
+            return History::default();
+        }
+        let mut index = index.min(states.len() - 1);
+        if states.len() > MAX_HISTORY {
+            let excess = states.len() - MAX_HISTORY;
+            states.drain(0..excess);
+            index = index.saturating_sub(excess);
+        }
+        History { states, index }
+    }
+
     pub fn state(&self) -> EditState {
         EditState {
             adjustments: self.current(),
@@ -515,5 +537,26 @@ mod tests {
         assert!(dark.light(None, None).is_none());
         // One-click enhancement keeps the light.
         assert_eq!(on.with_colour(engine_sys::Adjustments::default()).light_kind, LightSetting::Softbox);
+    }
+
+    #[test]
+    fn history_round_trips_through_its_parts_and_repairs_bad_input() {
+        let mut history = History::default();
+        history.commit(Adjustments { exposure: 1.0, ..Default::default() });
+        history.commit(Adjustments { exposure: 2.0, ..Default::default() });
+        history.undo();
+        let (states, index) = history.parts();
+        let restored = History::from_parts(states.to_vec(), index);
+        assert_eq!(restored.state(), history.state());
+        assert!(restored.state().can_redo);
+
+        assert_eq!(History::from_parts(Vec::new(), 3).state(), History::default().state());
+        let wild = History::from_parts(vec![Adjustments { exposure: 99.0, ..Default::default() }], 7);
+        assert_eq!(wild.current().exposure, 5.0);
+        let long: Vec<Adjustments> =
+            (0..MAX_HISTORY + 10).map(|i| Adjustments { contrast: (i % 100) as f32, ..Default::default() }).collect();
+        let trimmed = History::from_parts(long, MAX_HISTORY + 9);
+        assert_eq!(trimmed.parts().0.len(), MAX_HISTORY);
+        assert_eq!(trimmed.parts().1, MAX_HISTORY - 1);
     }
 }

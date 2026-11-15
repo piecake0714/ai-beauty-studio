@@ -1,6 +1,6 @@
 import { createStore } from "zustand/vanilla";
-import { errorCode, type Api } from "./api";
-import { withBackground, withLightKind } from "./adjustments";
+import { errorCode, isProjectPath, type Api } from "./api";
+import { adjustmentsKey, withBackground, withLightKind } from "./adjustments";
 import type { JobUpdate } from "./jobs";
 import { parseFrame, type Frame } from "./frame";
 import {
@@ -8,10 +8,12 @@ import {
   type Adjustments,
   type EditorMode,
   type EditState,
+  type ExportOptions,
   type FaceStatus,
   type FacesReport,
   type FileInfo,
   type LanguagePreference,
+  type RecoveryInfo,
   type Settings,
   type ThemePreference,
 } from "./types";
@@ -27,6 +29,31 @@ import {
 } from "./view";
 
 export type View = "home" | "editor";
+
+/** Labels for file dialogs, in the UI language. */
+export interface FileLabels {
+  supported: string;
+  images: string;
+  projects: string;
+  jpeg: string;
+  png: string;
+}
+
+/** A project or recovery whose original photo must be pointed to. */
+export interface PendingLocate {
+  /** The project file, or null for the recovery. */
+  projectPath: string | null;
+  /** Where the project expected the photo. */
+  expected: string;
+  /** "original_missing" or "original_changed". */
+  reason: string;
+}
+
+/** An export in progress or just finished. */
+export type ExportView =
+  | { state: "running"; jobId: number; fraction: number; cancelling: boolean; path: string }
+  | { state: "done"; path: string; width: number; height: number }
+  | { state: "failed"; code: string };
 
 /** Texts for the "discard unsaved adjustments?" question, in the UI language. */
 export interface DiscardPrompt {
@@ -99,6 +126,18 @@ export interface AppState {
   background: BackgroundView | null;
   /** 3D shape estimation for lighting; null when no image is open. */
   shape: AnalysisView | null;
+  /** The project file of the open document, once saved or opened as one. */
+  projectPath: string | null;
+  /** What was saved (see documentKey); null when never saved. */
+  savedKey: string | null;
+  saving: boolean;
+  exporting: ExportView | null;
+  /** Unsaved work from a session that ended unexpectedly. */
+  recovery: RecoveryInfo | null;
+  /** The original photo of a project must be pointed to before it opens. */
+  pendingLocate: PendingLocate | null;
+  /** Background images a project refers to that could not be found. */
+  missingBackgrounds: number;
 
   init(): Promise<void>;
   /** Open an image. With `discard`, asks first when adjustments would be lost. */
@@ -155,6 +194,43 @@ export interface AppState {
   setLightSubjectOnly(on: boolean): Promise<void>;
   /** Output columns to leave unadjusted for a render `outWidth` wide. */
   originalColumns(outWidth: number): number;
+  /** True when the open document has changes not saved in a project. */
+  isDirty(): boolean;
+  /** Open an image or project chosen in a dialog. */
+  pickToOpen(labels: FileLabels, discard?: DiscardPrompt): Promise<void>;
+  /** Save as a project; `asNew` (or a never-saved document) asks where. */
+  saveProject(labels: FileLabels, asNew?: boolean): Promise<boolean>;
+  /** Export the edited image; asks where. */
+  exportImage(options: ExportOptions, labels: FileLabels): Promise<void>;
+  cancelExport(): Promise<void>;
+  dismissExport(): void;
+  /** Point to the original photo of the pending project and open it. */
+  locateOriginal(filterName: string): Promise<void>;
+  cancelLocate(): void;
+  restoreRecovery(): Promise<void>;
+  discardRecovery(): Promise<void>;
+  /** Save to the recovery slot if there are unsaved changes. */
+  autosave(): Promise<void>;
+}
+
+/** What makes up the saved state of a document, as text: adjustments and
+ * which analyses have been run. Equal keys mean nothing to save. */
+export function documentKey(state: Pick<AppState, "edit" | "background" | "shape">): string {
+  const adjustments = state.edit?.adjustments ?? NO_ADJUSTMENTS;
+  return `${adjustmentsKey(adjustments)}|${state.background?.state === "ready"}|${state.shape?.state === "ready"}`;
+}
+
+/** File name without folders or extension. */
+export function fileStem(path: string): string {
+  const name = path.split(/[\\/]/).pop() ?? path;
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(0, dot) : name;
+}
+
+/** Folder of `path`, with its trailing separator ("" when none). */
+function folderOf(path: string): string {
+  const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
+  return cut >= 0 ? path.slice(0, cut + 1) : "";
 }
 
 /** The state of a running analysis after a job update for it. */
@@ -203,6 +279,66 @@ export function createAppStore(api: Api) {
       if (get().document === document) set({ document: { ...document, overview } });
     }
 
+    /** Show the document the core just opened (an image, project or
+     * recovery); `frame` is its overview. `saved` means it matches its file. */
+    async function adoptOpened(frame: ArrayBuffer, saved: boolean) {
+      const overview = parseFrame(frame);
+      const status = await api.documentStatus();
+      const info = await api.fileInfo(status.originalPath).catch(() => null);
+      const size = { width: overview.sourceWidth, height: overview.sourceHeight };
+      const edit = await api.editState();
+      const analyses = await api.backgroundStatus().catch(() => ({ ready: false, shapeReady: false }));
+      const viewport = get().viewport;
+      set({
+        document: { id: nextDocumentId++, path: status.originalPath, overview, size, info },
+        view: "editor",
+        camera: viewport ? fitCamera(size, viewport) : null,
+        edit,
+        live: edit.adjustments,
+        holdOriginal: false,
+        background: analyses.ready ? { state: "ready", provider: "saved" } : { state: "none" },
+        shape: analyses.shapeReady ? { state: "ready", provider: "saved" } : { state: "none" },
+        projectPath: status.projectPath,
+        missingBackgrounds: status.missingBackgrounds,
+        exporting: null,
+        // The core discards the recovery whenever a document opens.
+        recovery: null,
+      });
+      set({ savedKey: saved ? documentKey(get()) : null });
+      get().receiveFaces(
+        await api
+          .facesStatus()
+          .catch(() => ({ serial: get().facesSerial + 1, status: { state: "unavailable" as const, code: "internal" } })),
+      );
+      if (edit.edited || analyses.ready) await refreshOverview(edit.adjustments).catch(() => undefined);
+    }
+
+    async function openProjectFile(path: string, original: string | null) {
+      await adoptOpened(await api.openProject(path, original), true);
+    }
+
+    /** Restored work is unsaved until the user saves it. */
+    async function restoreFrom(original: string | null) {
+      await adoptOpened(await api.restoreRecovery(original), false);
+    }
+
+    /** A project whose photo is missing or changed asks the user to point
+     * to it; other failures are shown as errors. */
+    async function handleOpenFailure(reason: unknown, projectPath: string | null) {
+      const code = errorCode(reason);
+      if (code === "original_missing" || code === "original_changed") {
+        const expected = projectPath
+          ? await api
+              .inspectProject(projectPath)
+              .then((p) => p.originalPath)
+              .catch(() => "")
+          : (get().recovery?.originalPath ?? "");
+        set({ pendingLocate: { projectPath, expected, reason: code } });
+      } else {
+        set({ error: code });
+      }
+    }
+
     /** Adopt an edit state from the core and refresh the adjusted overview. */
     async function adoptEdit(change: () => Promise<EditState>) {
       try {
@@ -234,6 +370,7 @@ export function createAppStore(api: Api) {
             version: startup.version,
             settings: startup.settings,
             settingsRecovered: startup.settingsRecovered,
+            recovery: await api.recoveryStatus().catch(() => null),
           });
         } catch (reason) {
           set({ ready: true, error: errorCode(reason) });
@@ -241,8 +378,14 @@ export function createAppStore(api: Api) {
       },
 
       async confirmDiscard(discard) {
-        if (!discard || !get().edit?.edited) return true;
+        if (!discard || !get().isDirty()) return true;
         return api.confirm(discard.title, discard.message, discard.yes, discard.no);
+      },
+
+      isDirty() {
+        const state = get();
+        if (!state.document) return false;
+        return state.savedKey !== documentKey(state);
       },
 
       async openPath(path, discard) {
@@ -250,24 +393,13 @@ export function createAppStore(api: Api) {
         if (!(await get().confirmDiscard(discard))) return;
         set({ opening: true, error: null });
         try {
-          const overview = parseFrame(await api.openImage(path));
-          const info = await api.fileInfo(path).catch(() => null);
-          const size = { width: overview.sourceWidth, height: overview.sourceHeight };
-          const edit = await api.editState();
-          const viewport = get().viewport;
-          set({
-            document: { id: nextDocumentId++, path, overview, size, info },
-            view: "editor",
-            camera: viewport ? fitCamera(size, viewport) : null,
-            edit,
-            live: edit.adjustments,
-            holdOriginal: false,
-            background: { state: "none" },
-            shape: { state: "none" },
-          });
-          get().receiveFaces(await api.facesStatus().catch(() => ({ serial: get().facesSerial + 1, status: { state: "unavailable" as const, code: "internal" } })));
+          if (isProjectPath(path)) {
+            await openProjectFile(path, null);
+          } else {
+            await adoptOpened(await api.openImage(path), true);
+          }
         } catch (reason) {
-          set({ error: errorCode(reason) });
+          await handleOpenFailure(reason, isProjectPath(path) ? path : null);
         } finally {
           set({ opening: false });
         }
@@ -278,6 +410,100 @@ export function createAppStore(api: Api) {
           // Keep the list shown; it refreshes on the next change.
         }
       },
+
+      async pickToOpen(labels, discard) {
+        if (get().opening) return;
+        const path = await api.pickToOpen(labels);
+        if (path) await get().openPath(path, discard);
+      },
+
+      async locateOriginal(filterName) {
+        const pending = get().pendingLocate;
+        if (!pending) return;
+        const original = await api.pickImage(filterName);
+        if (!original) return;
+        set({ pendingLocate: null, opening: true, error: null });
+        try {
+          if (pending.projectPath) await openProjectFile(pending.projectPath, original);
+          else await restoreFrom(original);
+        } catch (reason) {
+          await handleOpenFailure(reason, pending.projectPath);
+        } finally {
+          set({ opening: false });
+        }
+      },
+
+      cancelLocate: () => set({ pendingLocate: null }),
+
+      async restoreRecovery() {
+        if (get().opening || !get().recovery) return;
+        set({ opening: true, error: null });
+        try {
+          await restoreFrom(null);
+        } catch (reason) {
+          await handleOpenFailure(reason, null);
+        } finally {
+          set({ opening: false });
+        }
+      },
+
+      async discardRecovery() {
+        await api.discardRecovery().catch(() => undefined);
+        set({ recovery: null });
+      },
+
+      async autosave() {
+        if (!get().isDirty()) return;
+        await api.autosave().catch(() => undefined);
+      },
+
+      async saveProject(labels, asNew = false) {
+        const state = get();
+        if (!state.document || state.saving) return false;
+        let target: string | null = null;
+        if (asNew || !state.projectPath) {
+          const base = state.projectPath ?? `${folderOf(state.document.path)}${fileStem(state.document.path)}.aibs`;
+          target = await api.pickSavePath(labels.projects, "aibs", base);
+          if (!target) return false;
+        }
+        set({ saving: true });
+        try {
+          const keyAtSave = documentKey(get());
+          const saved = await api.saveProject(target);
+          set({ projectPath: saved, savedKey: keyAtSave });
+          set({ settings: await api.getSettings().catch(() => get().settings) });
+          return true;
+        } catch (reason) {
+          set({ error: errorCode(reason) });
+          return false;
+        } finally {
+          set({ saving: false });
+        }
+      },
+
+      async exportImage(options, labels) {
+        const document = get().document;
+        if (!document || get().exporting?.state === "running") return;
+        const extension = options.format === "png" ? "png" : "jpg";
+        const suggested = `${folderOf(document.path)}${fileStem(document.path)}-edited.${extension}`;
+        const path = await api.pickSavePath(options.format === "png" ? labels.png : labels.jpeg, extension, suggested);
+        if (!path) return;
+        try {
+          const jobId = await api.exportImage(path, options);
+          set({ exporting: { state: "running", jobId, fraction: 0, cancelling: false, path } });
+        } catch (reason) {
+          set({ exporting: { state: "failed", code: errorCode(reason) } });
+        }
+      },
+
+      async cancelExport() {
+        const exporting = get().exporting;
+        if (exporting?.state !== "running") return;
+        set({ exporting: { ...exporting, cancelling: true } });
+        await api.cancelJob(exporting.jobId).catch(() => false);
+      },
+
+      dismissExport: () => set({ exporting: null }),
 
       async pickAndOpen(filterName, discard) {
         if (get().opening) return;
@@ -377,6 +603,13 @@ export function createAppStore(api: Api) {
       setSplit: (fraction) => set({ split: Math.min(1, Math.max(0, fraction)) }),
       setHoldOriginal: (on) => set({ holdOriginal: on }),
 
+      projectPath: null,
+      savedKey: null,
+      saving: false,
+      exporting: null,
+      recovery: null,
+      pendingLocate: null,
+      missingBackgrounds: 0,
       faces: null,
       facesSerial: 0,
       enhancing: false,
@@ -437,6 +670,33 @@ export function createAppStore(api: Api) {
       },
 
       receiveJobUpdate(update) {
+        const exporting = get().exporting;
+        if (exporting?.state === "running" && exporting.jobId === update.id) {
+          switch (update.state) {
+            case "progress":
+              set({ exporting: { ...exporting, fraction: Math.max(exporting.fraction, update.fraction) } });
+              break;
+            case "finished": {
+              const result = update.result as { path?: string; width?: number; height?: number } | null;
+              set({
+                exporting: {
+                  state: "done",
+                  path: result?.path ?? exporting.path,
+                  width: result?.width ?? 0,
+                  height: result?.height ?? 0,
+                },
+              });
+              break;
+            }
+            case "failed":
+              set({ exporting: { state: "failed", code: update.code } });
+              break;
+            case "cancelled":
+              set({ exporting: null });
+              break;
+          }
+          return;
+        }
         const shape = get().shape;
         if (shape?.state === "running" && shape.jobId === update.id) {
           const next = nextAnalysis(shape, update);

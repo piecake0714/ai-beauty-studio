@@ -1,14 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ask, open } from "@tauri-apps/plugin-dialog";
+import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import type {
   Adjustments,
+  DocumentStatus,
   EditorMode,
   EditState,
+  ExportOptions,
   FacesReport,
   FileInfo,
   LanguagePreference,
+  RecoveryInfo,
   Settings,
   Startup,
   ThemePreference,
@@ -25,6 +28,24 @@ export interface Api {
   getSettings(): Promise<Settings>;
   /** Show the file picker; resolves to null when cancelled. */
   pickImage(filterName: string): Promise<string | null>;
+  /** Pick an image or a project to open. */
+  pickToOpen(labels: { supported: string; images: string; projects: string }): Promise<string | null>;
+  /** Pick where to save; `extension` without the dot. */
+  pickSavePath(filterName: string, extension: string, defaultPath: string): Promise<string | null>;
+  /** Open a project; `original` is where the user says the photo is. */
+  openProject(path: string, original?: string | null): Promise<ArrayBuffer>;
+  inspectProject(path: string): Promise<{ originalPath: string; savedAt: number }>;
+  documentStatus(): Promise<DocumentStatus>;
+  /** Which AI analyses of the open image are available. */
+  backgroundStatus(): Promise<{ serial: number; ready: boolean; shapeReady: boolean }>;
+  /** Save as a project, to `path` or to the open project; resolves to the path saved to. */
+  saveProject(path: string | null): Promise<string>;
+  autosave(): Promise<void>;
+  recoveryStatus(): Promise<RecoveryInfo | null>;
+  restoreRecovery(original?: string | null): Promise<ArrayBuffer>;
+  discardRecovery(): Promise<void>;
+  /** Start exporting; resolves to the job id. */
+  exportImage(path: string, options: ExportOptions): Promise<number>;
   /** Open an image for editing; resolves to an overview frame of the whole image. */
   openImage(path: string): Promise<ArrayBuffer>;
   /** Render part of the open image. Rejects with "superseded" when a newer request arrived. */
@@ -84,6 +105,12 @@ export interface RenderRequest {
 }
 
 export const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "tif", "tiff", "webp"];
+export const PROJECT_EXTENSION = "aibs";
+
+/** True when `path` names a project file. */
+export function isProjectPath(path: string): boolean {
+  return path.toLowerCase().endsWith(`.${PROJECT_EXTENSION}`);
+}
 
 export const tauriApi: Api = {
   startup: () => invoke("startup"),
@@ -96,6 +123,32 @@ export const tauriApi: Api = {
     });
     return typeof path === "string" ? path : null;
   },
+  async pickToOpen(labels) {
+    const path = await open({
+      multiple: false,
+      directory: false,
+      filters: [
+        { name: labels.supported, extensions: [...IMAGE_EXTENSIONS, PROJECT_EXTENSION] },
+        { name: labels.images, extensions: IMAGE_EXTENSIONS },
+        { name: labels.projects, extensions: [PROJECT_EXTENSION] },
+      ],
+    });
+    return typeof path === "string" ? path : null;
+  },
+  async pickSavePath(filterName, extension, defaultPath) {
+    const path = await save({ defaultPath, filters: [{ name: filterName, extensions: [extension] }] });
+    return path ?? null;
+  },
+  openProject: (path, original) => invoke("open_project", { path, original: original ?? null }),
+  inspectProject: (path) => invoke("inspect_project", { path }),
+  documentStatus: () => invoke("document_status"),
+  backgroundStatus: () => invoke("background_status"),
+  saveProject: (path) => invoke("save_project", { path }),
+  autosave: () => invoke("autosave"),
+  recoveryStatus: () => invoke("recovery_status"),
+  restoreRecovery: (original) => invoke("restore_recovery", { original: original ?? null }),
+  discardRecovery: () => invoke("discard_recovery"),
+  exportImage: (path, options) => invoke("export_image", { path, options }),
   openImage: (path) => invoke("open_image", { path }),
   renderView: (request) => invoke("render_view", { request }),
   renderOverview: (adjustments) => invoke("render_overview", { adjustments }),

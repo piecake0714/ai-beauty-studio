@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { errorCode } from "../api";
-import { useApp, useDiscardPrompt, useI18n } from "../context";
+import { isProjectPath } from "../api";
+import { useApp, useDiscardPrompt, useFileLabels, useI18n } from "../context";
 import { fileName, folderOf, formatOpenedAt } from "../format";
 import { parseFrame, type Frame } from "../frame";
 import type { RecentFile } from "../types";
@@ -54,7 +55,10 @@ function RecentCard({ entry }: { entry: RecentFile }) {
         <span className="thumb">
           <Thumbnail path={entry.path} />
         </span>
-        <span className="recent-name">{name}</span>
+        <span className="recent-name">
+          {isProjectPath(entry.path) && <span className="badge">{t("files.projectBadge")}</span>}
+          {name}
+        </span>
         <span className="recent-meta">{folderOf(entry.path)}</span>
         <span className="recent-meta">{formatOpenedAt(entry.openedAt, language)}</span>
       </button>
@@ -72,20 +76,45 @@ function RecentCard({ entry }: { entry: RecentFile }) {
 }
 
 export function HomeView() {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const recent = useApp((s) => s.settings.recent);
   const opening = useApp((s) => s.opening);
-  const pickAndOpen = useApp((s) => s.pickAndOpen);
+  const pickToOpen = useApp((s) => s.pickToOpen);
+  const labels = useFileLabels();
+  const recovery = useApp((s) => s.recovery);
+  const restoreRecovery = useApp((s) => s.restoreRecovery);
+  const discardRecovery = useApp((s) => s.discardRecovery);
   const clearRecent = useApp((s) => s.clearRecent);
   const discard = useDiscardPrompt("open");
 
   return (
     <main className="home">
+      {recovery && (
+        <section className="recovery-card" role="alert">
+          <div>
+            <h2>{t("recovery.title")}</h2>
+            <p>
+              {t("recovery.message", {
+                name: fileName(recovery.projectPath ?? recovery.originalPath),
+                time: formatOpenedAt(recovery.savedAt, language),
+              })}
+            </p>
+          </div>
+          <div className="dialog-actions">
+            <button type="button" className="ghost" onClick={() => void discardRecovery()} disabled={opening}>
+              {t("recovery.discard")}
+            </button>
+            <button type="button" className="primary" onClick={() => void restoreRecovery()} disabled={opening}>
+              {t("recovery.restore")}
+            </button>
+          </div>
+        </section>
+      )}
       <section className="hero">
         <h1>{t("home.title")}</h1>
         <p>{t("home.subtitle")}</p>
-        <button type="button" className="primary large" onClick={() => pickAndOpen(t("imageFiles"), discard)} disabled={opening}>
-          {opening ? t("opening") : t("openImage")}
+        <button type="button" className="primary large" onClick={() => void pickToOpen(labels, discard)} disabled={opening}>
+          {opening ? t("opening") : t("file.openLong")}
         </button>
       </section>
 

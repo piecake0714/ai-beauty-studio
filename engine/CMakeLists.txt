@@ -45,6 +45,7 @@ add_library(aibs_engine SHARED
     portrait-engine/src/auto_adjust.cpp
     background-engine/src/background.cpp
     light-engine/src/light.cpp
+    export-engine/src/encode.cpp
 )
 target_include_directories(aibs_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_definitions(aibs_engine PRIVATE AIBS_BUILD)
@@ -71,7 +72,7 @@ install(FILES ${AIBS_RUNTIME_DLLS} DESTINATION bin)
 include(CTest)
 if(BUILD_TESTING)
     add_executable(aibs_engine_tests tests/decode_test.cpp tests/source_test.cpp tests/adjust_test.cpp tests/ai_test.cpp
-        tests/portrait_test.cpp tests/background_test.cpp tests/light_test.cpp tests/main.cpp
+        tests/portrait_test.cpp tests/background_test.cpp tests/light_test.cpp tests/export_test.cpp tests/main.cpp
         # Pure decoding code, tested directly with hand-made model outputs.
         portrait-engine/src/yunet_decode.cpp)
     # The tests use OpenCV directly to build large synthetic images.
