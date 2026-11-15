@@ -111,10 +111,24 @@ mod tests {
     }
 
     #[test]
-    fn opens_png_and_jpeg() {
-        for name in ["gradient_64x48.png", "gradient_64x48.jpg"] {
+    fn opens_every_supported_format() {
+        for name in [
+            "gradient_64x48.png",
+            "gradient_64x48.jpg",
+            "gradient_64x48.tif",
+            "gradient_64x48.webp",
+        ] {
             let image = open_image(&fixture(name), 0).unwrap();
             assert_eq!((image.width, image.height), (64, 48), "{name}");
+        }
+    }
+
+    #[test]
+    fn lossless_formats_decode_to_identical_pixels() {
+        let png = open_image(&fixture("gradient_64x48.png"), 0).unwrap();
+        for name in ["gradient_64x48.tif", "gradient_64x48.webp"] {
+            let other = open_image(&fixture(name), 0).unwrap();
+            assert_eq!(other.pixels, png.pixels, "{name}");
         }
     }
 

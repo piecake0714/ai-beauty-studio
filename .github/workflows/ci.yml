@@ -119,6 +119,9 @@ jobs:
           path: target/release/bundle/nsis/*.exe
           if-no-files-found: error
 
+      - name: Collect license data
+        run: python scripts/collect_licenses.py ci-out/licenses 2>&1 | tee ci-logs/8-licenses.txt
+
       # Publishes a trimmed copy of each step's log, plus the generated
       # lockfiles, to the `ci-logs` branch so build results can be read
       # without opening the Actions page.
