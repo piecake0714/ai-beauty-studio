@@ -154,6 +154,15 @@ impl Source {
     }
 }
 
+impl fmt::Debug for Source {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Source")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish()
+    }
+}
+
 impl Drop for Source {
     fn drop(&mut self) {
         // SAFETY: `raw` came from `aibs_source_open` and is freed once.

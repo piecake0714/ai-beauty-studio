@@ -76,7 +76,7 @@ jobs:
         id: engine_test
         run: |
           set -o pipefail
-          ctest --test-dir build/engine -C Release --output-on-failure 2>&1 | tee ci-logs/2-engine-test.txt
+          ctest --test-dir build/engine -C Release --output-on-failure -V 2>&1 | tee ci-logs/2-engine-test.txt
 
       - name: Install frontend dependencies
         id: npm_install
