@@ -15,11 +15,13 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   const exportImage = useApp((s) => s.exportImage);
   const cancelExport = useApp((s) => s.cancelExport);
   const dismissExport = useApp((s) => s.dismissExport);
+  const preset = useApp((s) => s.exportPreset);
   const [options, setOptions] = useState<ExportOptions>({
     format: transparent ? "png" : "jpeg",
     quality: 92,
     longSide: null,
     upscale: 1,
+    ...preset,
   });
 
   const close = () => {

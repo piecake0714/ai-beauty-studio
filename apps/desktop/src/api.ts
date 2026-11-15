@@ -11,6 +11,8 @@ import type {
   FacesReport,
   FileInfo,
   LutEntry,
+  BatchSettings,
+  Expansion,
   Stroke,
   ModelOverview,
   LanguagePreference,
@@ -78,6 +80,14 @@ export interface Api {
   startShapeEstimation(): Promise<number>;
   /** Open an image as a replacement background; resolves to its number. */
   addBackgroundImage(path: string): Promise<number>;
+  /** Ask for several images; empty when cancelled. */
+  pickImages(filterName: string): Promise<string[]>;
+  /** Ask for a folder; null when cancelled. */
+  pickFolder(): Promise<string | null>;
+  /** Edit and export many photos; returns the job id. */
+  startBatch(photos: string[], settings: BatchSettings): Promise<number>;
+  /** Generative expansion of the open photo into `path`; returns the job id. */
+  expandPhoto(expansion: Expansion, path: string): Promise<number>;
   /** Remove what the strokes paint over (AI); returns the job id. */
   removeObject(strokes: Stroke[]): Promise<number>;
   /** Repair an old photo (AI), strength 0–100; returns the job id. */
@@ -211,6 +221,17 @@ export const tauriApi: Api = {
   addBackgroundImage: (path) => invoke("add_background_image", { path }),
   listLuts: () => invoke("list_luts"),
   removeObject: (strokes) => invoke("remove_object", { strokes }),
+  async pickImages(filterName) {
+    const paths = await open({ multiple: true, directory: false, filters: [{ name: filterName, extensions: IMAGE_EXTENSIONS }] });
+    if (Array.isArray(paths)) return paths;
+    return typeof paths === "string" ? [paths] : [];
+  },
+  async pickFolder() {
+    const path = await open({ multiple: false, directory: true });
+    return typeof path === "string" ? path : null;
+  },
+  startBatch: (photos, settings) => invoke("start_batch", { photos, settings }),
+  expandPhoto: (expansion, path) => invoke("expand_photo", { expansion, path }),
   repairOldPhoto: (strength) => invoke("repair_old_photo", { strength }),
   importLut: (path) => invoke("import_lut", { path }),
   async pickLut(filterName) {

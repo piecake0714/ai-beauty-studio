@@ -6,6 +6,7 @@
 
 pub mod ai;
 pub mod background;
+pub mod batch;
 pub mod document;
 pub mod export;
 pub mod files;
@@ -17,6 +18,7 @@ pub mod models;
 pub mod portrait;
 pub mod project;
 pub mod recovery;
+pub mod render;
 pub mod settings;
 pub mod upscale;
 

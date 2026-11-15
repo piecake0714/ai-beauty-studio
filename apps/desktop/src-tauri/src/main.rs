@@ -14,7 +14,9 @@ use application_core::files::FileRef;
 use application_core::models::{ModelInfo, ModelRef};
 use application_core::project::{self, AnalysisModels, ProjectError};
 use application_core::recovery::{Recovery, RecoveryInfo};
+use application_core::render::EditInputs;
 use application_core::jobs::{JobError, Jobs};
+use application_core::batch::{self, BatchSettings};
 use application_core::looks::{LutEntry, LutLibrary};
 use application_core::models::Registry;
 use application_core::portrait::{self, FaceStatus};
@@ -208,42 +210,19 @@ impl RenderInputs {
         out_h: u32,
         original_columns: u32,
     ) -> Result<application_core::RgbaImage, EngineError> {
-        let clamped = adjustments.clamped();
-        let colour = clamped.to_engine();
-        let image = (clamped.background_image as usize)
-            .checked_sub(1)
-            .and_then(|i| self.images.get(i))
-            .and_then(|s| s.as_deref());
-        let background = self.matte.as_deref().and_then(|m| clamped.background(m, image));
-        let light = clamped.light(self.matte.as_deref(), self.shape.as_deref());
-        let prepared = clamped.prepare_layers();
         let images: Vec<Option<&Source>> = self.images.iter().map(|s| s.as_deref()).collect();
-        let layers = prepared.layers(self.matte.as_deref(), &images);
-        let spots = clamped.engine_spots();
-        // The patches in effect, in the order the adjustments list them.
-        let patches: Vec<&Patch> = clamped
-            .removals
-            .iter()
-            .filter_map(|id| self.patches.iter().find(|p| p.data.id == *id))
-            .map(|p| p.engine.as_ref())
-            .collect();
-        let lut = self.luts.get(&clamped.lut.id);
-        let look = clamped.look(lut.as_deref());
-        self.source.render_adjusted(
-            x,
-            y,
-            w,
-            h,
-            out_w,
-            out_h,
-            Some(clamped.portrait(&self.faces, &spots, &patches)),
-            Some(&colour),
-            background,
-            light,
-            look.as_ref(),
-            &layers,
-            original_columns,
-        )
+        let lut = self.luts.get(&adjustments.lut.id);
+        let patches: Vec<(u32, &Patch)> = self.patches.iter().map(|p| (p.data.id, p.engine.as_ref())).collect();
+        EditInputs {
+            source: &self.source,
+            faces: &self.faces,
+            matte: self.matte.as_deref(),
+            shape: self.shape.as_deref(),
+            images: &images,
+            lut: lut.as_deref(),
+            patches: &patches,
+        }
+        .render(adjustments, x, y, w, h, out_w, out_h, original_columns)
     }
 }
 
@@ -1104,6 +1083,59 @@ fn repair_old_photo(strength: f32, app: tauri::AppHandle, state: State<'_, AppSt
     }))
 }
 
+/// Edit and export many photos with `settings`, as a background job. The
+/// result is a list of {path, output, code} per photo.
+#[tauri::command]
+fn start_batch(photos: Vec<String>, settings: BatchSettings, state: State<'_, AppState>) -> Result<u64, String> {
+    if photos.is_empty() || photos.len() > batch::MAX_BATCH {
+        return Err("invalid_request".to_string());
+    }
+    let models_dir = state.models_dir.clone();
+    let (matte, depth, luts) = (state.background_model.clone(), state.depth_model.clone(), state.luts.clone());
+    let detector = if batch::needs(&batch::general_adjustments(&settings.adjustments), settings.auto_enhance).faces {
+        // Faces are optional: without the detector, portrait edits do nothing.
+        state.face_detector().ok().map(|(session, _)| session)
+    } else {
+        None
+    };
+    Ok(state.jobs.start(move |ctx| {
+        let registry = Registry::load(&models_dir).map_err(|e| JobError::new(e.code(), e.to_string()))?;
+        let models = batch::BatchModels { registry: &registry, detector: detector.as_deref(), matte: &matte, depth: &depth };
+        let items = batch::run(&photos, &settings, &models, &luts, ctx)?;
+        serde_json::to_value(items).map_err(|e| JobError::new("internal", e.to_string()))
+    }))
+}
+
+/// Generative expansion of the open photo, written to `path` (PNG or JPEG
+/// by its extension), as a background job. The result is {"path"}; the UI
+/// then opens it as a new photo.
+#[tauri::command]
+fn expand_photo(expansion: inpaint::Expansion, path: String, state: State<'_, AppState>) -> Result<u64, String> {
+    let (source, original) = {
+        let document = state.document.lock().map_err(|_| "internal".to_string())?;
+        let document = document.as_ref().ok_or_else(|| "no_document".to_string())?;
+        (document.source.clone(), PathBuf::from(&document.original.path))
+    };
+    let target = PathBuf::from(&path);
+    export::check_target(&target, &[original.as_path()]).map_err(|e| e.code().to_string())?;
+    let png = target.extension().is_some_and(|e| e.eq_ignore_ascii_case("png"));
+    let models_dir = state.models_dir.clone();
+    let slot = state.inpaint_model.clone();
+    Ok(state.jobs.start(move |ctx| {
+        let registry = Registry::load(&models_dir).map_err(|e| JobError::new(e.code(), e.to_string()))?;
+        let image = inpaint::expand(&registry, &slot, &source, expansion, ctx)?;
+        let options = ExportOptions {
+            format: if png { export::ExportFormat::Png } else { export::ExportFormat::Jpeg },
+            quality: 95,
+            long_side: None,
+            upscale: 1,
+        };
+        let bytes = export::encode(&image, &options).map_err(|e| JobError::new(e.code(), e.to_string()))?;
+        export::write(&target, &bytes, &[original.as_path()]).map_err(|e| JobError::new(e.code(), e.to_string()))?;
+        Ok(serde_json::json!({ "path": target.to_string_lossy(), "width": image.width, "height": image.height }))
+    }))
+}
+
 /// The LUT presets and the user's imported LUTs.
 #[tauri::command]
 fn list_luts(state: State<'_, AppState>) -> Vec<LutEntry> {
@@ -1358,6 +1390,8 @@ fn main() {
             import_lut,
             remove_object,
             repair_old_photo,
+            start_batch,
+            expand_photo,
             background_status,
             add_background_image,
             thumbnail,

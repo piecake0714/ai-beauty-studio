@@ -102,6 +102,10 @@ function fakeApi(overrides: Partial<Api> = {}): Api {
     ]),
     importLut: vi.fn(async () => ({ id: "user:New", name: "New", builtin: false })),
     removeObject: vi.fn(async () => 31),
+    pickImages: vi.fn(async () => ["C:\\a.jpg", "C:\\b.jpg"]),
+    pickFolder: vi.fn(async () => "D:\\out"),
+    startBatch: vi.fn(async () => 41),
+    expandPhoto: vi.fn(async () => 42),
     repairOldPhoto: vi.fn(async () => 32),
     pickLut: vi.fn(async () => "C:\\looks\\New.cube"),
     facesStatus: vi.fn(async () => ({ serial, status: { state: "detecting" as const } })),
@@ -828,5 +832,64 @@ describe("app store", () => {
     expect(store.getState().aiTask).toMatchObject({ state: "running" });
     store.getState().receiveJobUpdate({ state: "failed", id: 32, code: "inference_failed", detail: "" });
     expect(store.getState().aiTask).toMatchObject({ kind: "repair", state: "failed", code: "inference_failed" });
+  });
+
+  it("runs a batch and reports each photo", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    const settings = {
+      adjustments: NO_ADJUSTMENTS,
+      autoEnhance: true,
+      export: { format: "jpeg" as const, quality: 90, longSide: null, upscale: 1 as const },
+      folder: "D:\\out",
+      suffix: "-e",
+    };
+    await store.getState().startBatch([], settings);
+    expect(api.startBatch).not.toHaveBeenCalled();
+    await store.getState().startBatch(["C:\\a.jpg", "C:\\b.jpg"], settings);
+    expect(api.startBatch).toHaveBeenCalledWith(["C:\\a.jpg", "C:\\b.jpg"], settings);
+    expect(store.getState().batch).toMatchObject({ state: "running", jobId: 41, count: 2 });
+    store.getState().receiveJobUpdate({ state: "progress", id: 41, fraction: 0.5, stage: "photo" });
+    expect(store.getState().batch).toMatchObject({ fraction: 0.5 });
+    const items = [
+      { path: "C:\\a.jpg", output: "D:\\out\\a-e.jpg", code: null },
+      { path: "C:\\b.jpg", output: null, code: "not_an_image" },
+    ];
+    store.getState().receiveJobUpdate({ state: "finished", id: 41, result: items });
+    expect(store.getState().batch).toEqual({ state: "done", items });
+    store.getState().dismissBatch();
+    expect(store.getState().batch).toBeNull();
+  });
+
+  it("AI Studio: portrait preset, cutout after separation, expansion opens the new photo, export preset", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    await store.getState().openPath("C:\\a.jpg");
+    store.getState().showView("studio");
+    await store.getState().portraitPreset();
+    expect(store.getState().view).toBe("editor");
+    expect(store.getState().edit?.adjustments).toMatchObject({ skinSmoothing: 35, blemishRemoval: 50, teethWhitening: 25 });
+
+    await store.getState().startCutout();
+    expect(store.getState().cutoutPending).toBe(true);
+    const background = store.getState().background;
+    const jobId = background?.state === "running" ? background.jobId : -1;
+    store.getState().receiveJobUpdate({ state: "finished", id: jobId, result: { provider: "cpu" } });
+    await vi.waitFor(() => expect(store.getState().edit?.adjustments.backgroundMode).toBe("transparent"));
+    expect(store.getState().cutoutPending).toBe(false);
+
+    await store.getState().startExpand({ left: 0.25, top: 0, right: 0.25, bottom: 0 }, "PNG");
+    expect(api.pickSavePath).toHaveBeenCalledWith("PNG", "png", expect.stringMatching(/a-expanded\.png$/));
+    expect(api.expandPhoto).toHaveBeenCalled();
+    expect(store.getState().aiTask).toMatchObject({ kind: "expand", state: "running", jobId: 42 });
+    store.getState().receiveJobUpdate({ state: "finished", id: 42, result: { path: "C:\\a-expanded.png" } });
+    await vi.waitFor(() => expect(api.openImage).toHaveBeenCalledWith("C:\\a-expanded.png"));
+
+    const before = store.getState().exportRequests;
+    store.getState().requestExport({ upscale: 2 });
+    expect(store.getState().exportRequests).toBe(before + 1);
+    expect(store.getState().exportPreset).toEqual({ upscale: 2 });
+    store.getState().dismissExport();
+    expect(store.getState().exportPreset).toBeNull();
   });
 });

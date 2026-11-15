@@ -1158,3 +1158,103 @@ input:focus-visible {
   margin: 0;
   font-size: 0.9rem;
 }
+
+/* AI Studio and batch editing (2.0) */
+.studio,
+.batch {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 1100px;
+}
+
+.studio-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.studio-head h1,
+.batch h1 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+.studio-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.studio-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.studio-card h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.studio-card .note {
+  flex: 1;
+}
+
+.batch section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.batch h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.batch-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.batch-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.batch-list li.failed {
+  color: var(--error-text);
+}
+
+.batch-list .icon {
+  border: 0;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.batch input[type="text"] {
+  max-width: 240px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+}

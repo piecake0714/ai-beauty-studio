@@ -396,6 +396,187 @@ pub fn repair_old_photo(
     Ok(Repair { patches, adjustments: adjustments.clamped() })
 }
 
+/// How far to extend each side of a photo, as fractions of its width
+/// (left, right) and height (top, bottom), each 0..=1.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Expansion {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+impl Expansion {
+    /// Extra pixels on each side of a width x height photo.
+    pub fn pixels(&self, width: u32, height: u32) -> [u32; 4] {
+        let f = |v: f32, size: u32| (v.clamp(0.0, 1.0) as f64 * size as f64).round() as u32;
+        [f(self.left, width), f(self.top, height), f(self.right, width), f(self.bottom, height)]
+    }
+}
+
+/// Bilinear sample of an RGBA image at (x, y) (pixel centres at +0.5).
+fn sample(image: &[u8], w: usize, h: usize, x: f64, y: f64) -> [f64; 4] {
+    let fx = (x - 0.5).clamp(0.0, (w - 1) as f64);
+    let fy = (y - 0.5).clamp(0.0, (h - 1) as f64);
+    let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
+    let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+    let (tx, ty) = (fx - x0 as f64, fy - y0 as f64);
+    let mut out = [0.0; 4];
+    for (c, value) in out.iter_mut().enumerate() {
+        let p = |xx: usize, yy: usize| image[(yy * w + xx) * 4 + c] as f64;
+        *value = (p(x0, y0) * (1.0 - tx) + p(x1, y0) * tx) * (1.0 - ty) + (p(x0, y1) * (1.0 - tx) + p(x1, y1) * tx) * ty;
+    }
+    out
+}
+
+/// Generative expansion: a larger picture with the photo in it and the new
+/// border painted by the model to continue it. The border is made on a
+/// working copy at most 1024 pixels across and enlarged, so it is softer
+/// than the photo itself. Returns the full-size RGBA result.
+pub fn expand(
+    registry: &Registry,
+    slot: &ModelSlot,
+    source: &Source,
+    expansion: Expansion,
+    ctx: &JobContext,
+) -> Result<engine_sys::RgbaImage, JobError> {
+    let (w, h) = (source.width(), source.height());
+    let [left, top, right, bottom] = expansion.pixels(w, h);
+    let (nw, nh) = (w + left + right, h + top + bottom);
+    if left + top + right + bottom == 0 {
+        return Err(JobError::new("invalid_request", "nothing to add"));
+    }
+    if !crate::upscale::fits(nw, nh, 1) {
+        return Err(JobError::new("upscale_too_large", format!("{nw}x{nh}")));
+    }
+    // Working canvas.
+    let scale = (1024.0 / nw.max(nh) as f64).min(1.0);
+    let (cw, ch) = (((nw as f64 * scale).round() as usize).max(8), ((nh as f64 * scale).round() as usize).max(8));
+    let (px, py) = ((left as f64 * scale).round() as usize, (top as f64 * scale).round() as usize);
+    let (pw, ph) = (((w as f64 * scale).round() as usize).clamp(1, cw - px), ((h as f64 * scale).round() as usize).clamp(1, ch - py));
+    let photo = source.render(0.0, 0.0, w as f64, h as f64, pw as u32, ph as u32).map_err(|e| JobError::new("internal", e.to_string()))?;
+    let mut canvas = vec![0u8; cw * ch * 4];
+    let mut known = vec![false; cw * ch];
+    for y in 0..ph {
+        for x in 0..pw {
+            let o = ((py + y) * cw + px + x) * 4;
+            canvas[o..o + 4].copy_from_slice(&photo.pixels[(y * pw + x) * 4..(y * pw + x) * 4 + 4]);
+            known[(py + y) * cw + px + x] = true;
+        }
+    }
+    // Model windows (512 working pixels, overlapping), nearest the photo first.
+    let (sw, sh) = (SIZE.min(cw), SIZE.min(ch));
+    let starts = |len: usize, win: usize| -> Vec<usize> {
+        if len <= win {
+            return vec![0];
+        }
+        let step = win * 3 / 4;
+        let mut v: Vec<usize> = (0..len - win).step_by(step).collect();
+        v.push(len - win);
+        v
+    };
+    let mut windows: Vec<(usize, usize)> =
+        starts(ch, sh).into_iter().flat_map(|y| starts(cw, sw).into_iter().map(move |x| (x, y))).collect();
+    let (cx, cy) = ((px + pw / 2) as f64, (py + ph / 2) as f64);
+    windows.sort_by(|a, b| {
+        let d = |(x, y): (usize, usize)| (x as f64 + sw as f64 / 2.0 - cx).hypot(y as f64 + sh as f64 / 2.0 - cy);
+        d(*a).total_cmp(&d(*b))
+    });
+    let total = windows.len() as f32;
+    // Windows with nothing known yet are filled on a later pass, once
+    // their neighbours are.
+    for (n, (wx, wy)) in (0..3).flat_map(|_| windows.iter().copied()).enumerate() {
+        ctx.check()?;
+        ctx.progress(0.05 + 0.85 * (n as f32 / total).min(1.0), "expand");
+        let any_unknown = (wy..wy + sh).any(|y| (wx..wx + sw).any(|x| !known[y * cw + x]));
+        let any_known = (wy..wy + sh).any(|y| (wx..wx + sw).any(|x| known[y * cw + x]));
+        if !any_unknown || !any_known {
+            continue;
+        }
+        // The window resampled to the model's size.
+        let plane = SIZE * SIZE;
+        let mut image = vec![0.0f32; 3 * plane];
+        let mut hole = vec![0.0f32; plane];
+        for gy in 0..SIZE {
+            for gx in 0..SIZE {
+                let x = wx as f64 + (gx as f64 + 0.5) * sw as f64 / SIZE as f64;
+                let y = wy as f64 + (gy as f64 + 0.5) * sh as f64 / SIZE as f64;
+                let (ix, iy) = ((x as usize).min(cw - 1), (y as usize).min(ch - 1));
+                let i = gy * SIZE + gx;
+                if known[iy * cw + ix] {
+                    // Nearest pixel: blending with the still-empty border
+                    // would darken the photo's edge.
+                    let o = (iy * cw + ix) * 4;
+                    for c in 0..3 {
+                        image[c * plane + i] = canvas[o + c] as f32 / 255.0;
+                    }
+                } else {
+                    hole[i] = 1.0;
+                }
+            }
+        }
+        let side64 = SIZE as i64;
+        let (out, _) = background::run_reporting(registry, slot, ctx, false, |session| {
+            let (out, shape) = session.run_inputs(&[(&image, &[1, 3, side64, side64]), (&hole, &[1, 1, side64, side64])])?;
+            if shape != [1, 3, side64, side64] {
+                return Err(EngineError::InferenceFailed);
+            }
+            Ok(out)
+        })
+        .map_err(|error| ctx.check().err().unwrap_or(error))?;
+        // Write the filled pixels back into the unknown part of the window.
+        let mut filled = vec![0u8; plane * 4];
+        for i in 0..plane {
+            for c in 0..3 {
+                filled[i * 4 + c] = out[c * plane + i].round().clamp(0.0, 255.0) as u8;
+            }
+            filled[i * 4 + 3] = 255;
+        }
+        for y in wy..wy + sh {
+            for x in wx..wx + sw {
+                if known[y * cw + x] {
+                    continue;
+                }
+                let gx = (x - wx) as f64 * SIZE as f64 / sw as f64 + SIZE as f64 / sw as f64 / 2.0;
+                let gy = (y - wy) as f64 * SIZE as f64 / sh as f64 + SIZE as f64 / sh as f64 / 2.0;
+                let p = sample(&filled, SIZE, SIZE, gx, gy);
+                let o = (y * cw + x) * 4;
+                for c in 0..3 {
+                    canvas[o + c] = p[c].round().clamp(0.0, 255.0) as u8;
+                }
+                canvas[o + 3] = 255;
+                known[y * cw + x] = true;
+            }
+        }
+    }
+    if known.iter().any(|k| !k) {
+        return Err(JobError::new("inference_failed", "part of the border was not filled"));
+    }
+    ctx.progress(0.92, "compose");
+    // Full size: the photo itself, and the border from the working canvas.
+    let full = source.render(0.0, 0.0, w as f64, h as f64, w, h).map_err(|e| JobError::new("internal", e.to_string()))?;
+    let mut out = vec![0u8; nw as usize * nh as usize * 4];
+    for y in 0..nh as usize {
+        for x in 0..nw as usize {
+            let o = (y * nw as usize + x) * 4;
+            let (sx, sy) = (x as i64 - left as i64, y as i64 - top as i64);
+            if sx >= 0 && sy >= 0 && sx < w as i64 && sy < h as i64 {
+                let i = (sy as usize * w as usize + sx as usize) * 4;
+                out[o..o + 4].copy_from_slice(&full.pixels[i..i + 4]);
+            } else {
+                let p = sample(&canvas, cw, ch, (x as f64 + 0.5) * scale, (y as f64 + 0.5) * scale);
+                for c in 0..3 {
+                    out[o + c] = p[c].round().clamp(0.0, 255.0) as u8;
+                }
+                out[o + 3] = 255;
+            }
+        }
+    }
+    ctx.progress(1.0, "done");
+    Ok(engine_sys::RgbaImage { width: nw, height: nh, source_width: nw, source_height: nh, pixels: out })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -587,5 +768,63 @@ mod tests {
         let at = |x: u32, y: u32| out.pixels[((y * w + x) * 4) as usize];
         println!("repair: speck {}, scratch {}", at(60, 50), at(150, 75));
         assert!(at(60, 50) < 200 && at(150, 75) > 70);
+    }
+
+    #[test]
+    fn expansion_continues_the_photo_beyond_its_edges() {
+        let png = include_bytes!("../../../tests/fixtures/gradient_64x48.png");
+        let source = Arc::new(Source::open(png).unwrap());
+        let slot = Arc::new(ModelSlot::new(INPAINT_MODEL));
+        let (tx, rx) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        let jobs = Jobs::new(move |u| tx.lock().unwrap().send(u).unwrap());
+        let result: Arc<Mutex<Option<engine_sys::RgbaImage>>> = Arc::new(Mutex::new(None));
+        let (s2, out) = (source.clone(), result.clone());
+        jobs.start(move |ctx| {
+            let registry = Registry::load(&repo_models()).map_err(|e| JobError::new(e.code(), e.to_string()))?;
+            let more = Expansion { left: 0.25, top: 0.25, right: 0.25, bottom: 0.25 };
+            *out.lock().unwrap() = Some(expand(&registry, &slot, &s2, more, ctx)?);
+            Ok(serde_json::Value::Null)
+        });
+        wait(&rx);
+        let big = result.lock().unwrap().take().unwrap();
+        assert_eq!((big.width, big.height), (96, 72));
+        let original = source.render(0.0, 0.0, 64.0, 48.0, 64, 48).unwrap();
+        let at = |image: &engine_sys::RgbaImage, x: u32, y: u32| {
+            let i = ((y * image.width + x) * 4) as usize;
+            [image.pixels[i], image.pixels[i + 1], image.pixels[i + 2], image.pixels[i + 3]]
+        };
+        // The photo is in the middle, unchanged.
+        for (x, y) in [(0u32, 0u32), (63, 47), (30, 20)] {
+            assert_eq!(at(&big, x + 16, y + 12), at(&original, x, y));
+        }
+        // The border is painted in the photo's colours (not left empty):
+        // its average is close to the photo's average.
+        let mean = |image: &engine_sys::RgbaImage, inside: bool| {
+            let mut sum = [0.0f64; 3];
+            let mut n = 0.0;
+            for y in 0..72u32 {
+                for x in 0..96u32 {
+                    let in_photo = (16..80).contains(&x) && (12..60).contains(&y);
+                    if in_photo == inside {
+                        let p = at(image, x, y);
+                        assert_eq!(p[3], 255);
+                        for c in 0..3 {
+                            sum[c] += p[c] as f64;
+                        }
+                        n += 1.0;
+                    }
+                }
+            }
+            sum.map(|v| v / n)
+        };
+        let (photo, border) = (mean(&big, true), mean(&big, false));
+        println!("expand: photo mean {photo:.0?}, border mean {border:.0?}");
+        for c in 0..3 {
+            assert!((photo[c] - border[c]).abs() < 45.0, "channel {c}");
+        }
+        let none = Expansion::default();
+        assert_eq!(none.pixels(100, 50), [0, 0, 0, 0]);
+        assert_eq!(Expansion { left: 2.0, top: 0.5, right: -1.0, bottom: 0.1 }.pixels(100, 50), [100, 25, 0, 5]);
     }
 }
