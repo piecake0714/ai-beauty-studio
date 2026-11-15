@@ -518,7 +518,7 @@ impl Adjustments {
 
     /// The colour part, for the engine's colour pipeline (portrait
     /// retouching is passed separately, see [`Adjustments::skin_smoothing`]).
-    pub fn to_engine(self) -> engine_sys::Adjustments {
+    pub fn to_engine(&self) -> engine_sys::Adjustments {
         let a = self.clamped();
         engine_sys::Adjustments {
             exposure: a.exposure,
