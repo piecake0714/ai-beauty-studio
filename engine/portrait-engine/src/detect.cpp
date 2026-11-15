@@ -25,7 +25,7 @@ int32_t render_scaled(const aibs_source* source, double scale, Image& out) {
     const cv::Mat& full = source->levels[0];
     const auto w = static_cast<uint32_t>(std::max(1.0, std::round(full.cols * scale)));
     const auto h = static_cast<uint32_t>(std::max(1.0, std::round(full.rows * scale)));
-    return aibs_source_render(source, 0, 0, full.cols, full.rows, w, h, nullptr, nullptr, 0, &out.img);
+    return aibs_source_render(source, 0, 0, full.cols, full.rows, w, h, nullptr, nullptr, nullptr, 0, &out.img);
 }
 
 }  // namespace
@@ -45,7 +45,7 @@ int32_t aibs_measure_skin(const aibs_source* source, aibs_face* face) {
         const auto oh = static_cast<uint32_t>(std::max(1.0, std::round(rh * scale)));
         Image region;
         const int32_t status =
-            aibs_source_render(source, rx, ry, rw, rh, ow, oh, nullptr, nullptr, 0, &region.img);
+            aibs_source_render(source, rx, ry, rw, rh, ow, oh, nullptr, nullptr, nullptr, 0, &region.img);
         if (status != AIBS_OK) return status;
 
         cv::Mat rgba(static_cast<int>(oh), static_cast<int>(ow), CV_8UC4, region.img.data);

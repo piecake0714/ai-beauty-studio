@@ -32,8 +32,22 @@ function frameToCanvas(frame: Frame): HTMLCanvasElement {
   return canvas;
 }
 
-function lookKey(adjustments: Adjustments, originalColumns: number, draft: boolean): string {
-  return `${adjustmentsKey(adjustments)}|${originalColumns}|${draft ? "draft" : "full"}`;
+function lookKey(adjustments: Adjustments, originalColumns: number, draft: boolean, separated: boolean): string {
+  return `${adjustmentsKey(adjustments)}|${originalColumns}|${draft ? "draft" : "full"}|${separated ? "separated" : ""}`;
+}
+
+/** A light/dark checkerboard shown behind a removed background. */
+function checkerPattern(context: CanvasRenderingContext2D): CanvasPattern | null {
+  const tile = document.createElement("canvas");
+  tile.width = tile.height = 16;
+  const c = tile.getContext("2d");
+  if (!c) return null;
+  c.fillStyle = "#ffffff";
+  c.fillRect(0, 0, 16, 16);
+  c.fillStyle = "#d4d4d4";
+  c.fillRect(0, 0, 8, 8);
+  c.fillRect(8, 8, 8, 8);
+  return context.createPattern(tile, "repeat");
 }
 
 function sameViewport(a: Size, b: Size): boolean {
@@ -66,6 +80,7 @@ export function ImageCanvas() {
   const setSplit = useApp((s) => s.setSplit);
   const setRendering = useApp((s) => s.setRendering);
   const reportError = useApp((s) => s.reportError);
+  const separated = useApp((s) => s.background?.state === "ready");
 
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -84,7 +99,7 @@ export function ImageCanvas() {
   const columns = viewport ? originalColumns(viewport.width) : 0;
   // Uncommitted adjustments mean a slider is being dragged.
   const draft = committed !== null && !sameAdjustments(live, committed);
-  const look = lookKey(live, columns, draft);
+  const look = lookKey(live, columns, draft, separated);
   // Latest values for callbacks that outlive this render.
   const latestRef = useRef({ document, camera, viewport, live, columns, look, draft });
   latestRef.current = { document, camera, viewport, live, columns, look, draft };
@@ -127,6 +142,20 @@ export function ImageCanvas() {
     context.clearRect(0, 0, canvas.width, canvas.height);
     const overview = overviewRef.current;
     if (!document || !camera || !overview) return;
+
+    if (latestRef.current.live.backgroundMode === "transparent") {
+      // Checkerboard under the image, so removed areas read as transparent.
+      const pattern = checkerPattern(context);
+      if (pattern) {
+        context.fillStyle = pattern;
+        context.fillRect(
+          (0 - camera.cx) * camera.zoom + viewport.width / 2,
+          (0 - camera.cy) * camera.zoom + viewport.height / 2,
+          document.size.width * camera.zoom,
+          document.size.height * camera.zoom,
+        );
+      }
+    }
 
     const detail = detailRef.current;
     const coversView = !!detail && sameCamera(detail.camera, camera) && sameViewport(detail.viewport, viewport);

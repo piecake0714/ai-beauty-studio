@@ -12,11 +12,27 @@ pub const MAX_HISTORY: usize = 500;
 
 pub use engine_sys::HSL_BANDS;
 
+/// What to do with the background of the photo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BackgroundSetting {
+    /// Keep it (background brightness and saturation still apply).
+    #[default]
+    Original,
+    Transparent,
+    Color,
+    Blur,
+    Image,
+}
+
 /// Light and colour adjustments. All zero leaves the image unchanged.
 /// Exposure is in stops (EV), -5 to +5; every other value is -100 to +100.
 /// HSL arrays are per colour band: red, orange, yellow, green, aqua, blue,
 /// purple, magenta. `skin_smoothing` is portrait retouching, 0 to 100,
-/// applied to detected faces before the colour adjustments. Missing fields
+/// applied to detected faces before the colour adjustments. The
+/// `background_*` values apply once subject and background have been
+/// separated: `background_image` is the number of a replacement image added
+/// to the open document (0 for none). Missing fields
 /// read as zero, so older saved data loads.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -36,6 +52,14 @@ pub struct Adjustments {
     pub hsl_saturation: [f32; HSL_BANDS],
     pub hsl_luminance: [f32; HSL_BANDS],
     pub skin_smoothing: f32,
+    pub background_mode: BackgroundSetting,
+    /// R, G, B for [`BackgroundSetting::Color`].
+    pub background_color: [u8; 3],
+    /// 0 to 100.
+    pub background_blur: f32,
+    pub background_brightness: f32,
+    pub background_saturation: f32,
+    pub background_image: u32,
 }
 
 fn fix(value: f32, limit: f32) -> f32 {
@@ -66,11 +90,47 @@ impl Adjustments {
             hsl_saturation: self.hsl_saturation.map(|v| fix(v, 100.0)),
             hsl_luminance: self.hsl_luminance.map(|v| fix(v, 100.0)),
             skin_smoothing: fix(self.skin_smoothing, 100.0).max(0.0),
+            background_mode: self.background_mode,
+            background_color: self.background_color,
+            background_blur: fix(self.background_blur, 100.0).max(0.0),
+            background_brightness: fix(self.background_brightness, 100.0),
+            background_saturation: fix(self.background_saturation, 100.0),
+            background_image: self.background_image,
         }
     }
 
     pub fn is_identity(&self) -> bool {
         *self == Adjustments::default()
+    }
+
+    /// The background treatment for the engine, given the separated
+    /// subject and the replacement image (if the setting needs one and it
+    /// exists). None when nothing would change.
+    pub fn background<'a>(
+        &self,
+        matte: &'a engine_sys::Matte,
+        image: Option<&'a engine_sys::Source>,
+    ) -> Option<engine_sys::Background<'a>> {
+        use engine_sys::BackgroundMode as Mode;
+        let a = self.clamped();
+        let mode = match a.background_mode {
+            BackgroundSetting::Original => Mode::Original,
+            BackgroundSetting::Transparent => Mode::Transparent,
+            BackgroundSetting::Color => Mode::Color(a.background_color),
+            BackgroundSetting::Blur => Mode::Blur,
+            // A missing image leaves the background as it is.
+            BackgroundSetting::Image if image.is_some() => Mode::Image,
+            BackgroundSetting::Image => Mode::Original,
+        };
+        let unchanged = mode == Mode::Original && a.background_brightness == 0.0 && a.background_saturation == 0.0;
+        (!unchanged).then_some(engine_sys::Background {
+            matte,
+            mode,
+            blur: a.background_blur,
+            brightness: a.background_brightness,
+            saturation: a.background_saturation,
+            image: if mode == Mode::Image { image } else { None },
+        })
     }
 
     /// The colour part, for the engine's colour pipeline (portrait
@@ -113,7 +173,7 @@ impl Adjustments {
             hsl_hue: suggested.hsl_hue,
             hsl_saturation: suggested.hsl_saturation,
             hsl_luminance: suggested.hsl_luminance,
-            skin_smoothing: self.skin_smoothing,
+            ..self
         }
         .clamped()
     }
@@ -303,6 +363,8 @@ mod tests {
         for key in [
             "exposure", "brightness", "contrast", "highlights", "shadows", "whites", "blacks",
             "temperature", "tint", "vibrance", "saturation", "hslHue", "hslSaturation", "hslLuminance", "skinSmoothing",
+            "backgroundMode", "backgroundColor", "backgroundBlur", "backgroundBrightness", "backgroundSaturation",
+            "backgroundImage",
         ] {
             assert!(keys.contains(&key), "missing {key}");
         }
@@ -330,5 +392,36 @@ mod tests {
         assert_eq!(next.skin_smoothing, 35.0);
         assert_eq!(next.contrast, 0.0);
         assert_eq!((next.exposure, next.vibrance), (0.5, 10.0));
+    }
+
+    #[test]
+    fn background_settings_round_trip_and_clamp() {
+        let a: Adjustments =
+            serde_json::from_str(r#"{"backgroundMode":"blur","backgroundBlur":250,"backgroundColor":[1,2,3]}"#).unwrap();
+        assert_eq!(a.background_mode, BackgroundSetting::Blur);
+        assert_eq!(a.clamped().background_blur, 100.0);
+        assert_eq!(a.background_color, [1, 2, 3]);
+        assert!(!a.is_identity());
+        assert_eq!(serde_json::to_value(a).unwrap()["backgroundMode"], "blur");
+        // One-click enhancement keeps background choices.
+        assert_eq!(a.with_colour(engine_sys::Adjustments::default()).background_mode, BackgroundSetting::Blur);
+    }
+
+    #[test]
+    fn background_for_the_engine_only_when_something_changes() {
+        let matte = engine_sys::Matte::from_values(&[255; 4], 2, 2, 2, 2).unwrap();
+        let none = Adjustments::default();
+        assert!(none.background(&matte, None).is_none());
+        let image_without_file = Adjustments { background_mode: BackgroundSetting::Image, ..Default::default() };
+        assert!(image_without_file.background(&matte, None).is_none());
+        let darker = Adjustments { background_brightness: -20.0, ..Default::default() };
+        let b = darker.background(&matte, None).unwrap();
+        assert_eq!(b.mode, engine_sys::BackgroundMode::Original);
+        let colour = Adjustments {
+            background_mode: BackgroundSetting::Color,
+            background_color: [9, 8, 7],
+            ..Default::default()
+        };
+        assert_eq!(colour.background(&matte, None).unwrap().mode, engine_sys::BackgroundMode::Color([9, 8, 7]));
     }
 }

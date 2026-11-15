@@ -41,6 +41,10 @@ export interface Api {
   onFaces(handler: (report: FacesReport) => void): Promise<() => void>;
   /** One-click enhancement, recorded as one undoable step. */
   autoEnhance(): Promise<EditState>;
+  /** Start separating subject and background; resolves to the job id. */
+  startBackgroundSeparation(): Promise<number>;
+  /** Open an image as a replacement background; resolves to its number. */
+  addBackgroundImage(path: string): Promise<number>;
   redo(): Promise<EditState>;
   hardwareInfo(): Promise<Hardware>;
   /** Start the AI self-test; resolves to its job id. */
@@ -99,6 +103,8 @@ export const tauriApi: Api = {
   facesStatus: () => invoke("faces_status"),
   onFaces: (handler) => listen<FacesReport>("faces", (event) => handler(event.payload)),
   autoEnhance: () => invoke("auto_enhance"),
+  startBackgroundSeparation: () => invoke("start_background_separation"),
+  addBackgroundImage: (path) => invoke("add_background_image", { path }),
   redo: () => invoke("redo"),
   hardwareInfo: () => invoke("hardware_info"),
   startAiSelfTest: () => invoke("start_ai_self_test"),

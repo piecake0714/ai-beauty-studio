@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adjustmentsKey, hasHiddenInBeginner, isIdentity, sameAdjustments, withBand, withScalar } from "./adjustments";
+import { adjustmentsKey, fromHex, hasHiddenInBeginner, isIdentity, sameAdjustments, toHex, withBackground, withBand, withScalar } from "./adjustments";
 import { NO_ADJUSTMENTS } from "./types";
 
 describe("adjustment helpers", () => {
@@ -39,5 +39,20 @@ describe("adjustment helpers", () => {
     expect(isIdentity(smoothed)).toBe(false);
     expect(hasHiddenInBeginner(smoothed)).toBe(false);
     expect(adjustmentsKey(smoothed)).not.toBe(adjustmentsKey(NO_ADJUSTMENTS));
+  });
+
+  it("treats background settings as adjustments", () => {
+    const coloured = withBackground(NO_ADJUSTMENTS, { backgroundMode: "color", backgroundColor: [1, 2, 3] });
+    expect(isIdentity(coloured)).toBe(false);
+    expect(sameAdjustments(coloured, { ...coloured, backgroundColor: [1, 2, 3] })).toBe(true);
+    expect(sameAdjustments(coloured, { ...coloured, backgroundColor: [1, 2, 4] })).toBe(false);
+    expect(isIdentity(withScalar(NO_ADJUSTMENTS, "backgroundBlur", 10))).toBe(false);
+    expect(hasHiddenInBeginner(coloured)).toBe(false);
+  });
+
+  it("converts colours to and from hex", () => {
+    expect(toHex([255, 0, 16])).toBe("#ff0010");
+    expect(fromHex("#FF0010")).toEqual([255, 0, 16]);
+    expect(fromHex("nonsense")).toEqual([0, 0, 0]);
   });
 });

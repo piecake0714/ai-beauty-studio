@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { BANDS, BEGINNER, COLOUR, hasHiddenInBeginner, isIdentity, LIGHT, PORTRAIT, withBand, withScalar } from "../adjustments";
+import { BANDS, BEGINNER, COLOUR, fromHex, hasHiddenInBeginner, isIdentity, LIGHT, PORTRAIT, toHex, withBand, withScalar } from "../adjustments";
 import { useApp, useAppStore, useI18n } from "../context";
 import { errorMessage, type MessageKey } from "../i18n";
-import { HSL_BANDS, type BandAdjustment, type ScalarAdjustment } from "../types";
+import { HSL_BANDS, type BackgroundMode, type BandAdjustment, type ScalarAdjustment } from "../types";
 
 const signed = (digits: number) => (value: number) => {
   const text = Math.abs(value).toFixed(digits);
@@ -22,7 +22,24 @@ const RANGE: Record<ScalarAdjustment, { min: number; max: number; step: number; 
   vibrance: { min: -100, max: 100, step: 1, format: signed(0) },
   saturation: { min: -100, max: 100, step: 1, format: signed(0) },
   skinSmoothing: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
+  backgroundBlur: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
+  backgroundBrightness: { min: -100, max: 100, step: 1, format: signed(0) },
+  backgroundSaturation: { min: -100, max: 100, step: 1, format: signed(0) },
 };
+
+const BACKGROUND_MODES: BackgroundMode[] = ["original", "transparent", "color", "blur", "image"];
+
+/** Quick colour choices for a solid background. */
+const SWATCHES: [number, number, number][] = [
+  [255, 255, 255],
+  [240, 240, 240],
+  [128, 128, 128],
+  [0, 0, 0],
+  [220, 233, 245],
+  [40, 90, 170],
+  [245, 225, 225],
+  [200, 40, 50],
+];
 
 /** Swatch colours for the HSL band labels. */
 const BAND_COLOURS = ["#e5484d", "#f08c2b", "#e6c12e", "#46a758", "#2bb3c0", "#3e7bdc", "#8e4ec6", "#d6409f"];
@@ -93,8 +110,52 @@ function FaceNote() {
   );
 }
 
+/** Separation status and the button that starts it. */
+function SeparationStatus() {
+  const { t, language } = useI18n();
+  const background = useApp((s) => s.background);
+  const start = useApp((s) => s.startSeparation);
+  const cancel = useApp((s) => s.cancelSeparation);
+  if (!background) return null;
+  switch (background.state) {
+    case "none":
+      return (
+        <div className="separation">
+          <p className="note">{t("background.intro")}</p>
+          <button type="button" onClick={() => void start()}>
+            {t("background.separate")}
+          </button>
+        </div>
+      );
+    case "running":
+      return (
+        <div className="separation" role="status">
+          <p className="note">{t("background.running", { percent: Math.round(background.fraction * 100) })}</p>
+          <progress max={1} value={background.fraction} />
+          <button type="button" className="ghost small" onClick={() => void cancel()} disabled={background.cancelling}>
+            {t("ai.cancel")}
+          </button>
+        </div>
+      );
+    case "failed":
+      return (
+        <div className="separation">
+          <p className="error-text">{errorMessage(language, background.code)}</p>
+          <button type="button" onClick={() => void start()}>
+            {t("background.retry")}
+          </button>
+        </div>
+      );
+    case "ready":
+      return null;
+  }
+}
+
 export function AdjustPanel() {
   const { t } = useI18n();
+  const background = useApp((s) => s.background);
+  const chooseBackground = useApp((s) => s.chooseBackground);
+  const pickBackgroundImage = useApp((s) => s.pickBackgroundImage);
   const live = useApp((s) => s.live);
   const edited = useApp((s) => s.edit?.edited ?? false);
   const mode = useApp((s) => s.settings.editorMode);
@@ -168,6 +229,74 @@ export function AdjustPanel() {
         <h2 id="portrait-title">{t("adjust.portrait")}</h2>
         <FaceNote />
         {visible(PORTRAIT).map(scalar)}
+      </section>
+
+      <section aria-labelledby="background-title">
+        <h2 id="background-title">{t("background.title")}</h2>
+        <SeparationStatus />
+        {background?.state === "ready" && (
+          <>
+            <div className="segmented small wrap" role="radiogroup" aria-label={t("background.title")}>
+              {BACKGROUND_MODES.map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  role="radio"
+                  aria-checked={live.backgroundMode === mode}
+                  className={live.backgroundMode === mode ? "active" : ""}
+                  onClick={() =>
+                    mode === "image" && live.backgroundImage === 0
+                      ? void pickBackgroundImage(t("imageFiles"))
+                      : void chooseBackground(
+                          // A first colour choice starts from white rather than black.
+                          mode === "color" && live.backgroundColor.every((v) => v === 0)
+                            ? { backgroundMode: mode, backgroundColor: [255, 255, 255] }
+                            : { backgroundMode: mode },
+                        )
+                  }
+                >
+                  {t(`background.${mode}` as MessageKey)}
+                </button>
+              ))}
+            </div>
+            {live.backgroundMode === "color" && (
+              <div className="swatches">
+                {SWATCHES.map((rgb) => (
+                  <button
+                    key={rgb.join(",")}
+                    type="button"
+                    className={toHex(rgb) === toHex(live.backgroundColor) ? "swatch-button active" : "swatch-button"}
+                    style={{ background: toHex(rgb) }}
+                    aria-label={toHex(rgb)}
+                    onClick={() => void chooseBackground({ backgroundColor: rgb })}
+                  />
+                ))}
+                <label className="colour-pick">
+                  {t("background.custom")}
+                  <input
+                    type="color"
+                    value={toHex(live.backgroundColor)}
+                    onChange={(event) => setLive({ ...latest(), backgroundColor: fromHex(event.target.value) })}
+                    onBlur={commit}
+                  />
+                </label>
+              </div>
+            )}
+            {live.backgroundMode === "image" && (
+              <button type="button" className="ghost small" onClick={() => void pickBackgroundImage(t("imageFiles"))}>
+                {t("background.pickImage")}
+              </button>
+            )}
+            {live.backgroundMode === "transparent" && <p className="note">{t("background.transparentNote")}</p>}
+            {live.backgroundMode === "blur" && scalar("backgroundBlur")}
+            {live.backgroundMode !== "transparent" && live.backgroundMode !== "color" && (
+              <>
+                {scalar("backgroundBrightness")}
+                {scalar("backgroundSaturation")}
+              </>
+            )}
+          </>
+        )}
       </section>
 
       {advanced && (

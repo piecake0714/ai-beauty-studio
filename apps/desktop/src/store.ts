@@ -1,5 +1,7 @@
 import { createStore } from "zustand/vanilla";
 import { errorCode, type Api } from "./api";
+import { withBackground } from "./adjustments";
+import type { JobUpdate } from "./jobs";
 import { parseFrame, type Frame } from "./frame";
 import {
   NO_ADJUSTMENTS,
@@ -46,6 +48,13 @@ export interface OpenDocument {
   info: FileInfo | null;
 }
 
+/** Subject/background separation for the open image. */
+export type BackgroundView =
+  | { state: "none" }
+  | { state: "running"; jobId: number; fraction: number; cancelling: boolean }
+  | { state: "ready"; provider: string }
+  | { state: "failed"; code: string };
+
 export interface AppState {
   api: Api;
   ready: boolean;
@@ -79,6 +88,8 @@ export interface AppState {
   facesSerial: number;
   /** One-click enhancement is running. */
   enhancing: boolean;
+  /** Subject/background separation; null when no image is open. */
+  background: BackgroundView | null;
 
   init(): Promise<void>;
   /** Open an image. With `discard`, asks first when adjustments would be lost. */
@@ -118,6 +129,14 @@ export interface AppState {
   receiveFaces(report: FacesReport): void;
   /** One-click enhancement as one undoable step. */
   autoEnhance(): Promise<void>;
+  startSeparation(): Promise<void>;
+  cancelSeparation(): Promise<void>;
+  /** Adopt a background job update (others are ignored). */
+  receiveJobUpdate(update: JobUpdate): void;
+  /** Change the background treatment as one undoable step. */
+  chooseBackground(change: Partial<Pick<Adjustments, "backgroundMode" | "backgroundColor" | "backgroundImage">>): Promise<void>;
+  /** Pick an image file and use it as the background. */
+  pickBackgroundImage(filterName: string): Promise<void>;
   /** Output columns to leave unadjusted for a render `outWidth` wide. */
   originalColumns(outWidth: number): number;
 }
@@ -143,16 +162,21 @@ export function createAppStore(api: Api) {
       }
     }
 
+    /** Render the adjusted overview again (after anything that changes it). */
+    async function refreshOverview(adjustments: Adjustments) {
+      const document = get().document;
+      if (!document) return;
+      const overview = parseFrame(await api.renderOverview(adjustments));
+      // Ignore if another image was opened meanwhile.
+      if (get().document === document) set({ document: { ...document, overview } });
+    }
+
     /** Adopt an edit state from the core and refresh the adjusted overview. */
     async function adoptEdit(change: () => Promise<EditState>) {
       try {
         const edit = await change();
         set({ edit, live: edit.adjustments });
-        const document = get().document;
-        if (!document) return;
-        const overview = parseFrame(await api.renderOverview(edit.adjustments));
-        // Ignore if another image was opened meanwhile.
-        if (get().document === document) set({ document: { ...document, overview } });
+        await refreshOverview(edit.adjustments);
       } catch (reason) {
         const code = errorCode(reason);
         if (code !== "no_document") set({ error: code });
@@ -206,6 +230,7 @@ export function createAppStore(api: Api) {
             edit,
             live: edit.adjustments,
             holdOriginal: false,
+            background: { state: "none" },
           });
           get().receiveFaces(await api.facesStatus().catch(() => ({ serial: get().facesSerial + 1, status: { state: "unavailable" as const, code: "internal" } })));
         } catch (reason) {
@@ -322,6 +347,66 @@ export function createAppStore(api: Api) {
       faces: null,
       facesSerial: 0,
       enhancing: false,
+      background: null,
+
+      async startSeparation() {
+        const background = get().background;
+        if (!get().document || !background || background.state === "running") return;
+        try {
+          const jobId = await api.startBackgroundSeparation();
+          set({ background: { state: "running", jobId, fraction: 0, cancelling: false } });
+        } catch (reason) {
+          set({ background: { state: "failed", code: errorCode(reason) } });
+        }
+      },
+
+      async cancelSeparation() {
+        const background = get().background;
+        if (background?.state !== "running") return;
+        set({ background: { ...background, cancelling: true } });
+        await api.cancelJob(background.jobId).catch(() => false);
+      },
+
+      receiveJobUpdate(update) {
+        const background = get().background;
+        if (background?.state !== "running" || background.jobId !== update.id) return;
+        switch (update.state) {
+          case "progress":
+            set({ background: { ...background, fraction: Math.max(background.fraction, update.fraction) } });
+            break;
+          case "finished": {
+            const result = update.result as { provider?: string } | null;
+            set({ background: { state: "ready", provider: result?.provider ?? "cpu" } });
+            void refreshOverview(get().live).catch(() => undefined);
+            break;
+          }
+          case "failed":
+            set({ background: { state: "failed", code: update.code } });
+            break;
+          case "cancelled":
+            set({ background: { state: "none" } });
+            break;
+        }
+      },
+
+      async chooseBackground(change) {
+        if (!get().document) return;
+        const next = withBackground(get().live, change);
+        set({ live: next });
+        await adoptEdit(() => api.commitAdjustments(next));
+      },
+
+      async pickBackgroundImage(filterName) {
+        if (!get().document) return;
+        const path = await api.pickImage(filterName);
+        if (!path) return;
+        try {
+          const id = await api.addBackgroundImage(path);
+          await get().chooseBackground({ backgroundMode: "image", backgroundImage: id });
+        } catch (reason) {
+          set({ error: errorCode(reason) });
+        }
+      },
 
       receiveFaces(report) {
         const { facesSerial, faces } = get();

@@ -56,6 +56,19 @@ export function App() {
   }, [init]);
 
   const receiveFaces = useApp((s) => s.receiveFaces);
+  const receiveJobUpdate = useApp((s) => s.receiveJobUpdate);
+  useEffect(() => {
+    let stop: (() => void) | null = null;
+    let cancelled = false;
+    void api.onJobUpdate(receiveJobUpdate).then((unlisten) => {
+      if (cancelled) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      cancelled = true;
+      stop?.();
+    };
+  }, [api, receiveJobUpdate]);
   useEffect(() => {
     let stop: (() => void) | null = null;
     let cancelled = false;

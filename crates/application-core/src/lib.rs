@@ -5,6 +5,7 @@
 //! never written.
 
 pub mod ai;
+pub mod background;
 pub mod document;
 pub mod info;
 pub mod jobs;
@@ -17,7 +18,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-pub use engine_sys::{AiSession, EngineError, Face, Portrait, RgbaImage, Source};
+pub use engine_sys::{AiSession, Background, BackgroundMode, EngineError, Face, Matte, Portrait, RgbaImage, Source};
 
 /// Why an image could not be opened. `code()` is the stable identifier the
 /// UI maps to a localized message.
@@ -215,7 +216,7 @@ mod tests {
         let render = |history: &History| {
             let engine = history.current().to_engine();
             source
-                .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&engine), 0)
+                .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&engine), None, 0)
                 .unwrap()
                 .pixels
         };

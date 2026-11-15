@@ -15,3 +15,5 @@ apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.txt
 # Third-party model files are downloaded by scripts/fetch_models.py
 models/files/face_detection_yunet_2023mar.onnx
 models/licenses/face-yunet.LICENSE.txt
+models/files/BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx
+models/licenses/background-birefnet-lite.LICENSE.txt

@@ -76,6 +76,15 @@ jobs:
             ls build/packages/ort build/packages/dml
           } 2>&1 | tee ci-logs/0b-ai-packages.txt
 
+      - name: Cache third-party models
+        uses: actions/cache@v4
+        with:
+          path: |
+            models/files/*.onnx
+            !models/files/test-luma-v1.onnx
+          key: models-${{ hashFiles('models/registry.json') }}
+          restore-keys: models-
+
       - name: Download third-party models
         id: models
         run: |
@@ -148,6 +157,7 @@ jobs:
               --extra "DirectML 1.15.4 (Microsoft Software License Terms)|build/packages/dml/LICENSE.txt" \
               --extra "DirectML 1.15.4 third-party notices|build/packages/dml/ThirdPartyNotices.txt" \
               --extra "YuNet face detection model (OpenCV Zoo), MIT|models/licenses/face-yunet.LICENSE.txt" \
+              --extra "BiRefNet lite background model (Peng Zheng et al.), MIT|models/licenses/background-birefnet-lite.LICENSE.txt" \
               --out apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.txt
           } 2>&1 | tee ci-logs/5b-notices.txt
 

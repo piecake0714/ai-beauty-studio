@@ -1,5 +1,6 @@
 #include "aibs/engine.h"
 #include "../../color-engine/src/adjust.h"
+#include "../../background-engine/src/background.h"
 #include "../../portrait-engine/src/portrait.h"
 #include "source_internal.h"
 
@@ -76,6 +77,7 @@ int32_t aibs_source_render(const aibs_source* source,
                            uint32_t out_width, uint32_t out_height,
                            const aibs_portrait* portrait,
                            const aibs_adjustments* adjustments,
+                           const aibs_background* background,
                            uint32_t original_columns,
                            aibs_image* out) {
     if (out == nullptr) {
@@ -111,39 +113,47 @@ int32_t aibs_source_render(const aibs_source* source,
         const double fx = static_cast<double>(level.cols) / full.cols;
         const double fy = static_cast<double>(level.rows) / full.rows;
 
-        // Inverse map from output pixel index to level pixel index, using
-        // pixel centres: output pixel i covers source coordinate
-        // x + (i + 0.5) / scale_x, which is level index (that * fx) - 0.5.
-        const double ax = fx / scale_x;
-        const double ay = fy / scale_y;
-        const cv::Matx23d inverse(ax, 0.0, 0.5 * ax + x * fx - 0.5,
-                                  0.0, ay, 0.5 * ay + y * fy - 0.5);
+        // A background blur needs real neighbours beyond the visible
+        // region, so render a margin around it and crop it off at the end.
+        const bool composite = original_columns < out_width && aibs::background_active(background);
+        const int pad = composite ? aibs::background_margin(*background, full.cols, full.rows, scale_x, scale_y) : 0;
+        const double px = x - pad / scale_x;
+        const double py = y - pad / scale_y;
+        const int cols = static_cast<int>(out_width) + 2 * pad;
+        const int rows = static_cast<int>(out_height) + 2 * pad;
+        const int first = static_cast<int>(std::min<uint32_t>(original_columns, out_width)) + pad;
+
+        // Pixel centres: output pixel i shows source coordinate
+        // px + (i + 0.5) / scale_x.
         const bool enlarging = scale_x > 1.0 || scale_y > 1.0;
+        cv::Mat padded = aibs::warp_plane(level, fx, fy, px, py, scale_x, scale_y, cols, rows,
+                                          enlarging ? cv::INTER_NEAREST : cv::INTER_LINEAR);
 
-        cv::Mat bgr;
-        cv::warpAffine(level, bgr, inverse, cv::Size(static_cast<int>(out_width), static_cast<int>(out_height)),
-                       (enlarging ? cv::INTER_NEAREST : cv::INTER_LINEAR) | cv::WARP_INVERSE_MAP,
-                       cv::BORDER_REPLICATE);
-
-        // Retouch skin first, then adjust; both only right of the
-        // before/after split.
+        // Retouch skin, adjust, then composite the background; all only
+        // right of the before/after split.
         if (portrait != nullptr && original_columns < out_width) {
-            aibs::retouch_faces(bgr, static_cast<int>(original_columns), x, y, scale_x, scale_y, *portrait);
+            aibs::retouch_faces(padded, first, px, py, scale_x, scale_y, *portrait);
         }
-
-        // Adjust everything right of the before/after split, rows in parallel.
         if (adjustments != nullptr && original_columns < out_width) {
             const aibs::Pipeline pipeline(*adjustments);
             if (!pipeline.identity()) {
-                const int first = static_cast<int>(original_columns);
-                const int count = bgr.cols - first;
-                cv::parallel_for_(cv::Range(0, bgr.rows), [&](const cv::Range& rows) {
-                    for (int row = rows.start; row < rows.end; ++row) {
-                        pipeline.apply_bgr(bgr.ptr<uint8_t>(row) + 3 * first, count);
+                const int count = padded.cols - first;
+                cv::parallel_for_(cv::Range(0, padded.rows), [&](const cv::Range& range) {
+                    for (int row = range.start; row < range.end; ++row) {
+                        pipeline.apply_bgr(padded.ptr<uint8_t>(row) + 3 * first, count);
                     }
                 });
             }
         }
+        cv::Mat matte_alpha;
+        if (composite) {
+            const int32_t status =
+                aibs::composite_background(padded, first, px, py, scale_x, scale_y, *background, matte_alpha);
+            if (status != AIBS_OK) return status;
+        }
+        const cv::Rect visible(pad, pad, static_cast<int>(out_width), static_cast<int>(out_height));
+        const cv::Mat bgr = padded(visible);
+        if (!matte_alpha.empty()) matte_alpha = matte_alpha(visible);
 
         cv::Mat rgba;
         cv::cvtColor(bgr, rgba, cv::COLOR_BGR2RGBA);
@@ -163,7 +173,8 @@ int32_t aibs_source_render(const aibs_source* source,
             uint8_t* p = rgba.ptr<uint8_t>(row);
             const bool row_inside = row >= row0 && row < row1;
             for (int col = 0; col < rgba.cols; ++col) {
-                p[col * 4 + 3] = (row_inside && col >= col0 && col < col1) ? 255 : 0;
+                const bool inside = row_inside && col >= col0 && col < col1;
+                p[col * 4 + 3] = !inside ? 0 : matte_alpha.empty() ? 255 : matte_alpha.at<uint8_t>(row, col);
             }
         }
 

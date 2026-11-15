@@ -46,6 +46,7 @@ extern "C" {
         out_height: u32,
         portrait: *const PortraitRaw,
         adjustments: *const Adjustments,
+        background: *const BackgroundRaw,
         original_columns: u32,
         out: *mut AibsImage,
     ) -> i32;
@@ -57,6 +58,17 @@ extern "C" {
         capacity: u32,
         count: *mut u32,
     ) -> i32;
+    fn aibs_segment(source: *const AibsSourceRaw, model: *mut AiSessionRaw, out: *mut *mut MatteRaw) -> i32;
+    fn aibs_matte_create(
+        values: *const u8,
+        width: u32,
+        height: u32,
+        source_width: u32,
+        source_height: u32,
+        out: *mut *mut MatteRaw,
+    ) -> i32;
+    fn aibs_matte_coverage(matte: *const MatteRaw) -> f32;
+    fn aibs_matte_free(matte: *mut MatteRaw);
     fn aibs_auto_adjust(source: *const AibsSourceRaw, faces: *const Face, face_count: u32, out: *mut Adjustments) -> i32;
     fn aibs_gpu_list(out: *mut GpuInfoRaw, capacity: u32) -> u32;
     fn aibs_ai_runtime_version() -> *const c_char;
@@ -139,6 +151,127 @@ struct PortraitRaw {
     faces: *const Face,
     face_count: u32,
     smoothing: f32,
+}
+
+#[repr(C)]
+struct MatteRaw {
+    _private: [u8; 0],
+}
+
+/// Which subject pixels belong to the subject, for a whole source; made by
+/// [`Source::segment`] or [`Matte::from_values`].
+pub struct Matte {
+    raw: *mut MatteRaw,
+}
+
+// SAFETY: a matte is read-only after creation; the engine reads it from
+// any thread.
+unsafe impl Send for Matte {}
+unsafe impl Sync for Matte {}
+
+impl Matte {
+    /// A matte from coverage values (0 background .. 255 subject), `width`
+    /// x `height`, stretched over a source of the given size.
+    pub fn from_values(
+        values: &[u8],
+        width: u32,
+        height: u32,
+        source_width: u32,
+        source_height: u32,
+    ) -> Result<Matte, EngineError> {
+        if values.len() != width as usize * height as usize {
+            return Err(EngineError::InvalidArgument);
+        }
+        let mut raw: *mut MatteRaw = std::ptr::null_mut();
+        // SAFETY: `values` holds width * height bytes; `raw` is writable.
+        status_to_result(unsafe {
+            aibs_matte_create(values.as_ptr(), width, height, source_width, source_height, &mut raw)
+        })?;
+        Ok(Matte { raw })
+    }
+
+    /// Fraction of the image that is subject, 0..1.
+    pub fn coverage(&self) -> f32 {
+        // SAFETY: `raw` is a valid matte.
+        unsafe { aibs_matte_coverage(self.raw) }
+    }
+}
+
+impl Drop for Matte {
+    fn drop(&mut self) {
+        // SAFETY: `raw` came from the engine and is freed once.
+        unsafe { aibs_matte_free(self.raw) };
+    }
+}
+
+impl fmt::Debug for Matte {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Matte").field("coverage", &self.coverage()).finish()
+    }
+}
+
+/// What to do with the background (see [`Background`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundMode {
+    /// Keep it; brightness and saturation still apply.
+    Original,
+    /// Remove it: transparent.
+    Transparent,
+    /// Replace it with a colour (R, G, B).
+    Color([u8; 3]),
+    /// Blur it.
+    Blur,
+    /// Replace it with another image, scaled to cover.
+    Image,
+}
+
+/// Background treatment applied while rendering, after all other edits.
+#[derive(Debug, Clone, Copy)]
+pub struct Background<'a> {
+    pub matte: &'a Matte,
+    pub mode: BackgroundMode,
+    /// 0..100, for [`BackgroundMode::Blur`].
+    pub blur: f32,
+    /// -100..100, background only.
+    pub brightness: f32,
+    /// -100..100, background only.
+    pub saturation: f32,
+    /// The replacement for [`BackgroundMode::Image`].
+    pub image: Option<&'a Source>,
+}
+
+#[repr(C)]
+struct BackgroundRaw {
+    matte: *const MatteRaw,
+    mode: u32,
+    color: [u8; 3],
+    reserved: u8,
+    blur: f32,
+    brightness: f32,
+    saturation: f32,
+    image: *const AibsSourceRaw,
+}
+
+impl Background<'_> {
+    fn raw(&self) -> BackgroundRaw {
+        let (mode, color) = match self.mode {
+            BackgroundMode::Original => (0, [0; 3]),
+            BackgroundMode::Transparent => (1, [0; 3]),
+            BackgroundMode::Color(c) => (2, c),
+            BackgroundMode::Blur => (3, [0; 3]),
+            BackgroundMode::Image => (4, [0; 3]),
+        };
+        BackgroundRaw {
+            matte: self.matte.raw,
+            mode,
+            color,
+            reserved: 0,
+            blur: self.blur,
+            brightness: self.brightness,
+            saturation: self.saturation,
+            image: self.image.map_or(std::ptr::null(), |s| s.raw as *const AibsSourceRaw),
+        }
+    }
 }
 
 /// Most faces reported for one photo.
@@ -405,11 +538,11 @@ impl Source {
         out_width: u32,
         out_height: u32,
     ) -> Result<RgbaImage, EngineError> {
-        self.render_adjusted(x, y, w, h, out_width, out_height, None, None, 0)
+        self.render_adjusted(x, y, w, h, out_width, out_height, None, None, None, 0)
     }
 
-    /// Like [`Source::render`], applying portrait retouching and then
-    /// `adjustments` to every output column from `original_columns` on (the
+    /// Like [`Source::render`], applying portrait retouching, then
+    /// `adjustments`, then the background treatment to every output column from `original_columns` on (the
     /// columns left of it show the original).
     #[allow(clippy::too_many_arguments)]
     pub fn render_adjusted(
@@ -422,9 +555,12 @@ impl Source {
         out_height: u32,
         portrait: Option<Portrait<'_>>,
         adjustments: Option<&Adjustments>,
+        background: Option<Background<'_>>,
         original_columns: u32,
     ) -> Result<RgbaImage, EngineError> {
         let mut raw = empty_image();
+        let background_raw = background.map(|b| b.raw());
+        let background_ptr = background_raw.as_ref().map_or(std::ptr::null(), |b| b as *const BackgroundRaw);
         let portrait_raw = portrait.map(|p| PortraitRaw {
             faces: p.faces.as_ptr(),
             face_count: p.faces.len().min(MAX_FACES) as u32,
@@ -445,6 +581,7 @@ impl Source {
                 out_height,
                 portrait_ptr,
                 adjustments_ptr,
+                background_ptr,
                 original_columns,
                 &mut raw,
             )
@@ -465,6 +602,14 @@ impl Source {
         })?;
         faces.truncate((count as usize).min(MAX_FACES));
         Ok(faces)
+    }
+
+    /// Separate subject and background with the BiRefNet session `model`.
+    pub fn segment(&self, model: &AiSession) -> Result<Matte, EngineError> {
+        let mut raw: *mut MatteRaw = std::ptr::null_mut();
+        // SAFETY: both handles are valid; `raw` is writable.
+        status_to_result(unsafe { aibs_segment(self.raw, model.raw, &mut raw) })?;
+        Ok(Matte { raw })
     }
 
     /// Suggested adjustments for one-click enhancement.
@@ -638,14 +783,14 @@ mod tests {
         let original = source.render(0.0, 0.0, 64.0, 48.0, 64, 48).unwrap();
         let zero = Adjustments::default();
         let unchanged = source
-            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&zero), 0)
+            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&zero), None, 0)
             .unwrap();
         assert_eq!(unchanged.pixels, original.pixels);
 
         let mut look = Adjustments { exposure: -1.0, saturation: 40.0, ..Default::default() };
         look.hsl_hue[0] = 50.0;
         let split = source
-            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&look), 32)
+            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&look), None, 32)
             .unwrap();
         for col in [0usize, 31, 32, 63] {
             let p = (10 * 64 + col) * 4;
@@ -716,7 +861,7 @@ mod tests {
         let source = Source::open(PNG).unwrap();
         let plain = source.render(0.0, 0.0, 64.0, 48.0, 64, 48).unwrap();
         let portrait = Portrait { faces: &[], smoothing: 100.0 };
-        let with = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, Some(portrait), None, 0).unwrap();
+        let with = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, Some(portrait), None, None, 0).unwrap();
         assert_eq!(plain.pixels, with.pixels);
     }
 
@@ -739,5 +884,28 @@ mod tests {
         let detector = AiSession::open(&model, Provider::Cpu).unwrap();
         let source = Source::open(PNG).unwrap();
         assert_eq!(source.detect_faces(&detector, 0.6).unwrap(), Vec::<Face>::new());
+    }
+
+    #[test]
+    fn background_colour_replaces_only_the_background() {
+        let source = Source::open(PNG).unwrap();
+        // Left half subject.
+        let values: Vec<u8> = (0..32 * 24).map(|i| if i % 32 < 16 { 255 } else { 0 }).collect();
+        let matte = Matte::from_values(&values, 32, 24, 64, 48).unwrap();
+        assert!((matte.coverage() - 0.5).abs() < 1e-3);
+        let plain = source.render(0.0, 0.0, 64.0, 48.0, 64, 48).unwrap();
+        let background = Background {
+            matte: &matte,
+            mode: BackgroundMode::Color([1, 2, 3]),
+            blur: 0.0,
+            brightness: 0.0,
+            saturation: 0.0,
+            image: None,
+        };
+        let out = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, None, Some(background), 0).unwrap();
+        let at = |image: &RgbaImage, x: usize, y: usize| image.pixels[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4].to_vec();
+        assert_eq!(at(&out, 5, 10), at(&plain, 5, 10));
+        assert_eq!(at(&out, 60, 10), vec![1, 2, 3, 255]);
+        assert_eq!(Matte::from_values(&values, 10, 10, 64, 48).unwrap_err(), EngineError::InvalidArgument);
     }
 }

@@ -7,13 +7,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use application_core::ai::{self, Hardware};
+use application_core::background::{self as separation, ModelSlot};
 use application_core::document::{Adjustments, EditState, History};
 use application_core::jobs::{JobError, Jobs};
 use application_core::models::Registry;
 use application_core::portrait::{self, FaceStatus};
 use application_core::info::{self, FileInfo};
 use application_core::settings::{self, EditorMode, LanguagePreference, Settings, ThemePreference};
-use application_core::{AiSession, EngineError, Face, Portrait, Source};
+use application_core::{AiSession, EngineError, Face, Matte, Portrait, Source};
 use tauri::ipc::Response;
 use tauri::path::BaseDirectory;
 use tauri::{Emitter, Manager, State};
@@ -41,12 +42,69 @@ struct OpenDocument {
     /// Faces found in the image (empty until detection finishes).
     faces: Arc<Vec<Face>>,
     faces_status: FaceStatus,
+    /// Subject/background separation, once it has been run.
+    matte: Option<Arc<Matte>>,
+    /// Replacement background images added to this document; number n in
+    /// the adjustments is element n - 1.
+    background_images: Vec<Arc<Source>>,
+}
+
+/// Everything a render needs, taken from the document under its lock and
+/// used after releasing it.
+struct RenderInputs {
+    source: Arc<Source>,
+    faces: Arc<Vec<Face>>,
+    matte: Option<Arc<Matte>>,
+    images: Vec<Arc<Source>>,
 }
 
 impl OpenDocument {
-    /// What a render needs: the source and the faces to retouch.
-    fn render_inputs(&self) -> (Arc<Source>, Arc<Vec<Face>>) {
-        (self.source.clone(), self.faces.clone())
+    fn render_inputs(&self) -> RenderInputs {
+        RenderInputs {
+            source: self.source.clone(),
+            faces: self.faces.clone(),
+            matte: self.matte.clone(),
+            images: self.background_images.clone(),
+        }
+    }
+}
+
+impl RenderInputs {
+    /// Render with every edit in `adjustments` applied.
+    #[allow(clippy::too_many_arguments)]
+    fn render(
+        &self,
+        adjustments: &Adjustments,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        out_w: u32,
+        out_h: u32,
+        original_columns: u32,
+    ) -> Result<application_core::RgbaImage, EngineError> {
+        let clamped = adjustments.clamped();
+        let colour = clamped.to_engine();
+        let image = (clamped.background_image as usize)
+            .checked_sub(1)
+            .and_then(|i| self.images.get(i))
+            .map(|s| s.as_ref());
+        let background = self.matte.as_deref().and_then(|m| clamped.background(m, image));
+        self.source.render_adjusted(
+            x,
+            y,
+            w,
+            h,
+            out_w,
+            out_h,
+            Some(Portrait {
+                faces: &self.faces,
+                smoothing: clamped.skin_smoothing,
+            }),
+            Some(&colour),
+            background,
+            original_columns,
+        )
     }
 }
 
@@ -75,6 +133,8 @@ struct AppState {
     document_serial: AtomicU64,
     /// The face detector, loaded on first use and kept.
     detector: Mutex<Option<Arc<AiSession>>>,
+    /// The background separation model, loaded on first use and kept.
+    background_model: Arc<ModelSlot>,
 }
 
 impl AppState {
@@ -166,6 +226,8 @@ async fn open_image(path: String, app: tauri::AppHandle, state: State<'_, AppSta
         history: History::default(),
         faces: Arc::new(Vec::new()),
         faces_status: FaceStatus::Detecting,
+        matte: None,
+        background_images: Vec::new(),
     });
     // Find faces in the background; the image is usable meanwhile.
     tauri::async_runtime::spawn_blocking(move || {
@@ -220,7 +282,7 @@ async fn render_view(request: RenderRequest, state: State<'_, AppState>) -> Resu
         return Err("invalid_request".to_string());
     }
     state.latest_render.fetch_max(request.id, Ordering::SeqCst);
-    let (source, faces) = state
+    let inputs = state
         .document
         .lock()
         .map_err(|_| "internal".to_string())?
@@ -232,18 +294,15 @@ async fn render_view(request: RenderRequest, state: State<'_, AppState>) -> Resu
     if request.id < latest {
         return Err("superseded".to_string());
     }
-    let smoothing = request.adjustments.clamped().skin_smoothing;
-    let adjustments = request.adjustments.to_engine();
     let image = tauri::async_runtime::spawn_blocking(move || {
-        source.render_adjusted(
+        inputs.render(
+            &request.adjustments,
             request.x,
             request.y,
             request.width,
             request.height,
             request.out_width,
             request.out_height,
-            Some(Portrait { faces: &faces, smoothing }),
-            Some(&adjustments),
             request.original_columns,
         )
     })
@@ -261,31 +320,20 @@ async fn render_view(request: RenderRequest, state: State<'_, AppState>) -> Resu
 /// canvas draws it under sharper renders, e.g. at the edges while panning.
 #[tauri::command]
 async fn render_overview(adjustments: Adjustments, state: State<'_, AppState>) -> Result<Response, String> {
-    let (source, faces) = state
+    let inputs = state
         .document
         .lock()
         .map_err(|_| "internal".to_string())?
         .as_ref()
         .map(OpenDocument::render_inputs)
         .ok_or_else(|| "no_document".to_string())?;
-    let smoothing = adjustments.clamped().skin_smoothing;
-    let adjustments = adjustments.to_engine();
     let image = tauri::async_runtime::spawn_blocking(move || {
-        let longer = source.width().max(source.height()).max(1);
+        let (width, height) = (inputs.source.width(), inputs.source.height());
+        let longer = width.max(height).max(1);
         let scale = (OVERVIEW_MAX_DIMENSION as f64 / longer as f64).min(1.0);
-        let out_w = ((source.width() as f64 * scale).round() as u32).max(1);
-        let out_h = ((source.height() as f64 * scale).round() as u32).max(1);
-        source.render_adjusted(
-            0.0,
-            0.0,
-            source.width() as f64,
-            source.height() as f64,
-            out_w,
-            out_h,
-            Some(Portrait { faces: &faces, smoothing }),
-            Some(&adjustments),
-            0,
-        )
+        let out_w = ((width as f64 * scale).round() as u32).max(1);
+        let out_h = ((height as f64 * scale).round() as u32).max(1);
+        inputs.render(&adjustments, 0.0, 0.0, width as f64, height as f64, out_w, out_h, 0)
     })
     .await
     .map_err(|_| "internal".to_string())?
@@ -349,18 +397,79 @@ fn faces_status(state: State<'_, AppState>) -> Result<FacesReply, String> {
 /// undoable step. Skin smoothing is kept.
 #[tauri::command]
 async fn auto_enhance(state: State<'_, AppState>) -> Result<EditState, String> {
-    let (source, faces) = state
+    let inputs = state
         .document
         .lock()
         .map_err(|_| "internal".to_string())?
         .as_ref()
         .map(OpenDocument::render_inputs)
         .ok_or_else(|| "no_document".to_string())?;
-    let suggested = tauri::async_runtime::spawn_blocking(move || source.auto_adjust(&faces))
+    let suggested = tauri::async_runtime::spawn_blocking(move || inputs.source.auto_adjust(&inputs.faces))
         .await
         .map_err(|_| "internal".to_string())?
         .map_err(engine_error_code)?;
     with_history(&state, |history| history.commit(history.current().with_colour(suggested)))
+}
+
+/// Separate subject and background of the open image as a background job
+/// ("job-update" events); the result carries the image's serial. Returns
+/// the job id.
+#[tauri::command]
+fn start_background_separation(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<u64, String> {
+    let (serial, source) = {
+        let document = state.document.lock().map_err(|_| "internal".to_string())?;
+        let document = document.as_ref().ok_or_else(|| "no_document".to_string())?;
+        (document.serial, document.source.clone())
+    };
+    let models_dir = state.models_dir.clone();
+    let slot = state.background_model.clone();
+    Ok(state.jobs.start(move |ctx| {
+        let registry = Registry::load(&models_dir).map_err(|e| JobError::new(e.code(), e.to_string()))?;
+        let (matte, report) = separation::separate(&registry, &slot, &source, ctx)?;
+        let state = app.state::<AppState>();
+        let mut document = state.document.lock().map_err(|_| JobError::new("internal", "document lock"))?;
+        match document.as_mut().filter(|d| d.serial == serial) {
+            Some(document) => document.matte = Some(Arc::new(matte)),
+            None => return Err(JobError::new("cancelled", "another image was opened")),
+        }
+        let mut value = serde_json::to_value(report).map_err(|e| JobError::new("internal", e.to_string()))?;
+        value["serial"] = serde_json::json!(serial);
+        Ok(value)
+    }))
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackgroundStatus {
+    serial: u64,
+    /// Subject and background have been separated.
+    ready: bool,
+}
+
+#[tauri::command]
+fn background_status(state: State<'_, AppState>) -> Result<BackgroundStatus, String> {
+    let document = state.document.lock().map_err(|_| "internal".to_string())?;
+    let document = document.as_ref().ok_or_else(|| "no_document".to_string())?;
+    Ok(BackgroundStatus {
+        serial: document.serial,
+        ready: document.matte.is_some(),
+    })
+}
+
+/// Open an image to use as the background; returns its number for the
+/// adjustments (`backgroundImage`).
+#[tauri::command]
+async fn add_background_image(path: String, state: State<'_, AppState>) -> Result<u32, String> {
+    let file = PathBuf::from(&path);
+    let source = tauri::async_runtime::spawn_blocking(move || {
+        application_core::open_document(&file).map_err(|e| e.code().to_string())
+    })
+    .await
+    .map_err(|_| "internal".to_string())??;
+    let mut document = state.document.lock().map_err(|_| "internal".to_string())?;
+    let document = document.as_mut().ok_or_else(|| "no_document".to_string())?;
+    document.background_images.push(Arc::new(source));
+    Ok(document.background_images.len() as u32)
 }
 
 #[tauri::command]
@@ -461,6 +570,7 @@ fn main() {
                 models_dir,
                 document_serial: AtomicU64::new(0),
                 detector: Mutex::new(None),
+                background_model: Arc::new(ModelSlot::default()),
             });
             Ok(())
         })
@@ -476,6 +586,9 @@ fn main() {
             redo,
             faces_status,
             auto_enhance,
+            start_background_separation,
+            background_status,
+            add_background_image,
             thumbnail,
             file_info,
             set_theme,

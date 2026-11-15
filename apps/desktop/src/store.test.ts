@@ -56,6 +56,8 @@ function fakeApi(overrides: Partial<Api> = {}): Api {
       index = Math.min(states.length - 1, index + 1);
       return editState();
     }),
+    startBackgroundSeparation: vi.fn(async () => 7),
+    addBackgroundImage: vi.fn(async () => 1),
     facesStatus: vi.fn(async () => ({ serial, status: { state: "detecting" as const } })),
     onFaces: vi.fn(async () => () => {}),
     autoEnhance: vi.fn(async () => {
@@ -351,5 +353,53 @@ describe("app store", () => {
     const store = createAppStore(api);
     await store.getState().autoEnhance();
     expect(api.autoEnhance).not.toHaveBeenCalled();
+  });
+
+  it("tracks background separation through job updates of its own job only", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    expect(store.getState().background).toBeNull();
+    await store.getState().openPath("C:\\a.jpg");
+    expect(store.getState().background).toEqual({ state: "none" });
+    await store.getState().startSeparation();
+    expect(store.getState().background).toMatchObject({ state: "running", jobId: 7 });
+    store.getState().receiveJobUpdate({ state: "progress", id: 99, fraction: 0.9, stage: "run" });
+    expect(store.getState().background).toMatchObject({ fraction: 0 });
+    store.getState().receiveJobUpdate({ state: "progress", id: 7, fraction: 0.4, stage: "run" });
+    expect(store.getState().background).toMatchObject({ fraction: 0.4 });
+    store.getState().receiveJobUpdate({ state: "finished", id: 7, result: { provider: "directml" } });
+    expect(store.getState().background).toEqual({ state: "ready", provider: "directml" });
+    // Opening another image starts over.
+    await store.getState().openPath("C:\\b.jpg");
+    expect(store.getState().background).toEqual({ state: "none" });
+  });
+
+  it("reports a failed or cancelled separation", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    await store.getState().openPath("C:\\a.jpg");
+    await store.getState().startSeparation();
+    await store.getState().cancelSeparation();
+    expect(api.cancelJob).toHaveBeenCalledWith(7);
+    expect(store.getState().background).toMatchObject({ cancelling: true });
+    store.getState().receiveJobUpdate({ state: "cancelled", id: 7 });
+    expect(store.getState().background).toEqual({ state: "none" });
+    await store.getState().startSeparation();
+    store.getState().receiveJobUpdate({ state: "failed", id: 7, code: "model_missing", detail: "" });
+    expect(store.getState().background).toEqual({ state: "failed", code: "model_missing" });
+  });
+
+  it("changes the background as one undoable step and adds background images", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    await store.getState().openPath("C:\\a.jpg");
+    await store.getState().chooseBackground({ backgroundMode: "color", backgroundColor: [255, 255, 255] });
+    expect(store.getState().live.backgroundMode).toBe("color");
+    expect(store.getState().edit?.canUndo).toBe(true);
+    await store.getState().pickBackgroundImage("Images");
+    expect(api.addBackgroundImage).toHaveBeenCalledWith("C:\\照片\\a.jpg");
+    expect(store.getState().live).toMatchObject({ backgroundMode: "image", backgroundImage: 1 });
+    await store.getState().undo();
+    expect(store.getState().live.backgroundMode).toBe("color");
   });
 });

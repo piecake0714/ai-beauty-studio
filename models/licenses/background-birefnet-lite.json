@@ -1,0 +1,13 @@
+{
+  "model": "background-birefnet-lite",
+  "version": "general-bb_swin_v1_tiny-epoch_232",
+  "source": "Official BiRefNet repository by Peng Zheng et al., GitHub release v1 (https://github.com/ZhengPeng7/BiRefNet/releases/tag/v1), ONNX converted by the authors",
+  "license": "MIT",
+  "licenseText": "licenses/background-birefnet-lite.LICENSE.txt (downloaded with the model by scripts/fetch_models.py)",
+  "commercialUse": true,
+  "trainingData": "DIS5K-TR and DIS-TEs, DUTS, HRSOD, UHRSD, HRS10K, P3M-10k and others per the upstream model zoo; dataset terms not reviewed (see models/CANDIDATES.md)",
+  "notes": "Separates the main subject from the background; used for background removal, replacement, blur and background adjustments.",
+  "checkedOn": "2026-11-15",
+  "checkedBy": "Project maintainer",
+  "approved": true
+}

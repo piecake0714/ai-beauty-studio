@@ -117,13 +117,40 @@ typedef struct aibs_portrait {
     float smoothing;      /* 0 (off) to 100 */
 } aibs_portrait;
 
+/* A decoded image; see aibs_source_open below. */
+typedef struct aibs_source aibs_source;
+
+/*
+ * Subject/background separation ("matte"): per-pixel subject coverage,
+ * 0 (background) to 255 (subject), for a whole source. Created by
+ * aibs_segment (AI) or aibs_matte_create (given values); read-only after.
+ */
+typedef struct aibs_matte aibs_matte;
+
+#define AIBS_BG_ORIGINAL 0     /* keep the background (adjustable) */
+#define AIBS_BG_TRANSPARENT 1  /* remove it: output alpha is the matte */
+#define AIBS_BG_COLOR 2        /* a solid colour */
+#define AIBS_BG_BLUR 3         /* the original background, blurred */
+#define AIBS_BG_IMAGE 4        /* another image, scaled to cover */
+
+/* Background treatment applied while rendering, after all other edits. */
+typedef struct aibs_background {
+    const aibs_matte* matte;
+    uint32_t mode;             /* AIBS_BG_* */
+    uint8_t color[3];          /* R, G, B for AIBS_BG_COLOR */
+    uint8_t reserved;
+    float blur;                /* 0..100, for AIBS_BG_BLUR */
+    float brightness;          /* -100..100, background only (-1..+1 EV) */
+    float saturation;          /* -100..100, background only */
+    const aibs_source* image;  /* for AIBS_BG_IMAGE */
+} aibs_background;
+
 /*
  * A decoded image kept at full resolution inside the engine, with a
  * precomputed pyramid of smaller copies so any region can be shown quickly
  * at any zoom. Read-only once opened: several threads may render from the
  * same source at once.
  */
-typedef struct aibs_source aibs_source;
 
 /* Decode encoded bytes (JPEG, PNG, TIFF, WebP) into a new source. On
  * success *out must be released with aibs_source_free. */
@@ -140,8 +167,9 @@ AIBS_API void aibs_source_size(const aibs_source* source, uint32_t* width, uint3
  * visible; reducing uses the pyramid and bilinear filtering.
  *
  * portrait (may be NULL) retouches skin first; adjustments (may be NULL)
- * follow. The leftmost original_columns output columns get neither, for a
- * before/after split view; 0 changes everything, out_width or more shows
+ * follow; background (may be NULL) is composited last. The leftmost
+ * original_columns output columns get none of them, for a before/after
+ * split view; 0 changes everything, out_width or more shows
  * the original only.
  */
 AIBS_API int32_t aibs_source_render(const aibs_source* source,
@@ -149,6 +177,7 @@ AIBS_API int32_t aibs_source_render(const aibs_source* source,
                                     uint32_t out_width, uint32_t out_height,
                                     const aibs_portrait* portrait,
                                     const aibs_adjustments* adjustments,
+                                    const aibs_background* background,
                                     uint32_t original_columns,
                                     aibs_image* out);
 
@@ -236,6 +265,29 @@ AIBS_API int32_t aibs_measure_skin(const aibs_source* source, aibs_face* face);
  */
 AIBS_API int32_t aibs_auto_adjust(const aibs_source* source, const aibs_face* faces,
                                   uint32_t face_count, aibs_adjustments* out);
+
+/* ---------------------------------------------------------------------
+ * Background
+ * ------------------------------------------------------------------- */
+
+/*
+ * Separate subject from background with a BiRefNet session (input
+ * 1 x 3 x 1024 x 1024, normalised RGB; output 1 x 1 x 1024 x 1024 logits).
+ * Edges are refined against the image. On success *out must be released
+ * with aibs_matte_free.
+ */
+AIBS_API int32_t aibs_segment(const aibs_source* source, aibs_ai_session* model, aibs_matte** out);
+
+/* A matte from given coverage values (width x height bytes, 0..255) that
+ * stretch over a source of source_width x source_height pixels. */
+AIBS_API int32_t aibs_matte_create(const uint8_t* values, uint32_t width, uint32_t height,
+                                   uint32_t source_width, uint32_t source_height, aibs_matte** out);
+
+/* Fraction of the image covered by the subject, 0..1. */
+AIBS_API float aibs_matte_coverage(const aibs_matte* matte);
+
+/* Release a matte. Safe on NULL. */
+AIBS_API void aibs_matte_free(aibs_matte* matte);
 
 #ifdef __cplusplus
 }
