@@ -73,8 +73,9 @@ impl Crop {
         let unit = |v: f32, default: f32| if v.is_finite() { v.clamp(0.0, 1.0) } else { default };
         let x = unit(self.x, 0.0).min(1.0 - MIN_CROP);
         let y = unit(self.y, 0.0).min(1.0 - MIN_CROP);
-        let width = unit(self.width, 1.0).clamp(MIN_CROP, 1.0 - x);
-        let height = unit(self.height, 1.0).clamp(MIN_CROP, 1.0 - y);
+        // 1 - x can round to just under MIN_CROP; never let max < min.
+        let width = unit(self.width, 1.0).clamp(MIN_CROP, (1.0 - x).max(MIN_CROP));
+        let height = unit(self.height, 1.0).clamp(MIN_CROP, (1.0 - y).max(MIN_CROP));
         Crop { x, y, width, height }
     }
 
