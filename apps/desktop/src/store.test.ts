@@ -669,7 +669,11 @@ describe("app store", () => {
     expect(store.getState().live.layers.map((l) => l.name)).toEqual(["B", "A"]);
     await store.getState().removeLayer(first.id);
     expect(store.getState().live.layers.map((l) => l.name)).toEqual(["B"]);
+    // The image layer added last stays selected; removing it clears the selection.
+    expect(store.getState().selectedLayer).toBe(second.id);
+    await store.getState().removeLayer(second.id);
     expect(store.getState().selectedLayer).toBeNull();
+    await store.getState().undo();
     await store.getState().undo();
     expect(store.getState().live.layers.map((l) => l.name)).toEqual(["B", "A"]);
   });
