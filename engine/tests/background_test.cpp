@@ -227,13 +227,13 @@ void test_compositing() {
 // Soft edges: the edge control moves them, and a replaced background does
 // not keep a fringe of the old background's colour.
 void test_soft_edges() {
-    // Coverage ramps from subject at x = 50 to background at x = 70, and
+    // Coverage ramps from subject at x = 57 to background at x = 63, and
     // the photo there is the matching mix of red subject and background.
     std::vector<uint8_t> values(static_cast<size_t>(kW) * kH);
     cv::Mat scene = test_scene();
     for (int y = 0; y < kH; ++y) {
         for (int x = 0; x < kW; ++x) {
-            const double a = std::clamp((70.0 - (x + 0.5)) / 20.0, 0.0, 1.0);
+            const double a = std::clamp((63.0 - (x + 0.5)) / 6.0, 0.0, 1.0);
             values[static_cast<size_t>(y) * kW + x] = static_cast<uint8_t>(a * 255.0 + 0.5);
             const int bx = std::max(x, kW / 2);  // background pattern under the subject
             const cv::Vec3b back = scene.at<cv::Vec3b>(y, bx);
@@ -260,8 +260,8 @@ void test_soft_edges() {
     CHECK(render(source, &bg, pulled));
     bg.edge = 0;
     if (plain.img.data && pushed.img.data && pulled.img.data) {
-        CHECK(pushed.px(62, 40)[3] > plain.px(62, 40)[3] + 20);
-        CHECK(pulled.px(62, 40)[3] + 20 < plain.px(62, 40)[3]);
+        CHECK(pushed.px(61, 40)[3] > plain.px(61, 40)[3] + 20);
+        CHECK(pulled.px(61, 40)[3] + 20 < plain.px(61, 40)[3]);
         CHECK(pushed.px(20, 40)[3] == 255 && pushed.px(100, 40)[3] == 0);  // ends stay
     }
 
@@ -270,11 +270,11 @@ void test_soft_edges() {
     Image white;
     CHECK(render(source, &bg, white));
     if (white.img.data && original.img.data) {
-        // At x = 65 the photo shows background but coverage is about 1/4.
-        const int k = values[40 * kW + 65];
-        const int naive_blue = (original.px(65, 40)[2] * k + 255 * (255 - k)) / 255;
-        std::printf("info: soft edge blue at x=65: naive %d, with subject colour %d\n", naive_blue, white.px(65, 40)[2]);
-        CHECK(white.px(65, 40)[2] + 4 < naive_blue);
+        // At x = 61 coverage is about 1/4: mostly background in the photo.
+        const int k = values[40 * kW + 61];
+        const int naive_blue = (original.px(61, 40)[2] * k + 255 * (255 - k)) / 255;
+        std::printf("info: soft edge blue at x=61: naive %d, with subject colour %d\n", naive_blue, white.px(61, 40)[2]);
+        CHECK(white.px(61, 40)[2] + 8 < naive_blue);
     }
 }
 

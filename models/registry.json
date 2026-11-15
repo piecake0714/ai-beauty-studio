@@ -82,7 +82,7 @@
       "id": "depth-anything-v2-small",
       "version": "onnx-community",
       "file": "files/depth-anything-v2-small.onnx",
-      "sha256": "unpinned",
+      "sha256": "afb6a5c28f3b6bf1618c6e43f02073ef9dfdc70e937502d51603e57b0a1df10c",
       "purpose": "Relative depth for 3D lighting (Depth Anything V2 Small)",
       "input": {
         "name": "pixel_values",
