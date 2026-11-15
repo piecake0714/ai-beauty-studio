@@ -35,6 +35,8 @@ export function TopBar({ onOpenSettings, onExport }: { onOpenSettings: () => voi
       <nav role="tablist" className="tabs">
         {tab("home", t("nav.home"))}
         {tab("editor", t("nav.editor"), !hasDocument)}
+        {tab("studio", t("nav.studio"))}
+        {tab("batch", t("nav.batch"))}
       </nav>
       {title && (
         <span className="doc-title" title={dirty ? t("file.unsaved") : undefined}>

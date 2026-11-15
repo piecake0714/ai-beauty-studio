@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { EditorView } from "./components/EditorView";
 import { ExportDialog } from "./components/ExportDialog";
+import { BatchView } from "./components/BatchView";
 import { HomeView } from "./components/HomeView";
+import { StudioView } from "./components/StudioView";
 import { LocateDialog } from "./components/LocateDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { TopBar } from "./components/TopBar";
@@ -46,6 +48,11 @@ export function App() {
   const dirtyKey = useApp((s) => (s.document && s.savedKey !== documentKey(s) ? `${s.document.id}|${documentKey(s)}` : null));
   const labels = useFileLabels();
   const [exportOpen, setExportOpen] = useState(false);
+  // AI Studio asks for the export dialog through the store.
+  const exportRequests = useApp((s) => s.exportRequests);
+  useEffect(() => {
+    if (exportRequests > 0) setExportOpen(true);
+  }, [exportRequests]);
   const dismissError = useApp((s) => s.dismissError);
   const dismissRecovered = useApp((s) => s.dismissRecovered);
   const zoomStep = useApp((s) => s.zoomStep);
@@ -228,7 +235,7 @@ export function App() {
           </button>
         </div>
       )}
-      {view === "editor" ? <EditorView /> : <HomeView />}
+      {view === "editor" ? <EditorView /> : view === "studio" ? <StudioView /> : view === "batch" ? <BatchView /> : <HomeView />}
       {settingsOpen && <SettingsDialog onClose={closeSettings} />}
       {exportOpen && hasDocument && <ExportDialog onClose={() => setExportOpen(false)} />}
       <LocateDialog />

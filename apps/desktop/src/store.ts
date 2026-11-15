@@ -27,6 +27,9 @@ import {
   type ExportOptions,
   type Layer,
   type LutEntry,
+  type BatchItem,
+  type BatchSettings,
+  type Expansion,
   type Stroke,
   type FaceStatus,
   type FacesReport,
@@ -47,15 +50,21 @@ import {
   type Size,
 } from "./view";
 
-export type View = "home" | "editor";
+export type View = "home" | "editor" | "studio" | "batch";
+
+/** A batch running, finished or failed. */
+export type BatchView =
+  | { state: "running"; jobId: number; fraction: number; cancelling: boolean; count: number }
+  | { state: "done"; items: BatchItem[] }
+  | { state: "failed"; code: string };
 
 /** What a pointer drag on the picture does. */
 export type Tool = "none" | "brush" | "eraser" | "crop" | "heal" | "remove";
 
 /** An AI edit running or failed: object removal or old-photo repair. */
 export type AiTask =
-  | { kind: "remove" | "repair"; state: "running"; jobId: number; fraction: number; cancelling: boolean }
-  | { kind: "remove" | "repair"; state: "failed"; code: string };
+  | { kind: "remove" | "repair" | "expand"; state: "running"; jobId: number; fraction: number; cancelling: boolean }
+  | { kind: "remove" | "repair" | "expand"; state: "failed"; code: string };
 
 /** Brush settings (not part of the document). */
 export interface BrushSettings {
@@ -194,6 +203,13 @@ export interface AppState {
   /** What is painted for object removal (not part of the document). */
   removeStrokes: Stroke[];
   aiTask: AiTask | null;
+  batch: BatchView | null;
+  /** Export settings to start the next export dialog with (AI Studio). */
+  exportPreset: Partial<ExportOptions> | null;
+  /** Increases when something asks for the export dialog. */
+  exportRequests: number;
+  /** Turn the background transparent once the running separation ends. */
+  cutoutPending: boolean;
 
   init(): Promise<void>;
   /** Open an image. With `discard`, asks first when adjustments would be lost. */
@@ -290,6 +306,18 @@ export interface AppState {
   /** Repair an old photo (AI), strength 0–100; on success one undoable step. */
   startRepair(strength: number): Promise<void>;
   cancelAiTask(): Promise<void>;
+  /** Edit and export the photos with the batch settings. */
+  startBatch(photos: string[], settings: BatchSettings): Promise<void>;
+  cancelBatch(): Promise<void>;
+  dismissBatch(): void;
+  /** Generative expansion into a new photo (asks where), which then opens. */
+  startExpand(expansion: Expansion, filterName: string): Promise<void>;
+  /** AI Studio: one-click portrait (enhance, then gentle retouching). */
+  portraitPreset(): Promise<void>;
+  /** AI Studio: separate the subject and make the background transparent. */
+  startCutout(): Promise<void>;
+  /** Open the export dialog with these settings. */
+  requestExport(preset: Partial<ExportOptions>): void;
   /** Read the LUT list from the core. */
   loadLuts(): Promise<void>;
   /** Choose a LUT (one undoable step); "" for none. */
@@ -612,7 +640,7 @@ export function createAppStore(api: Api) {
         await api.cancelJob(exporting.jobId).catch(() => false);
       },
 
-      dismissExport: () => set({ exporting: null }),
+      dismissExport: () => set({ exporting: null, exportPreset: null }),
 
       async pickAndOpen(filterName, discard) {
         if (get().opening) return;
@@ -622,6 +650,8 @@ export function createAppStore(api: Api) {
 
       showView(view) {
         if (view === "editor" && !get().document) return;
+        // Leaving the editor ends any tool in use there.
+        if (view !== "editor" && get().tool !== "none") get().setTool("none");
         set({ view });
       },
 
@@ -789,6 +819,73 @@ export function createAppStore(api: Api) {
 
       removeStrokes: [],
       aiTask: null,
+      batch: null,
+      exportPreset: null,
+      exportRequests: 0,
+      cutoutPending: false,
+
+      async startBatch(photos, settings) {
+        if (photos.length === 0 || get().batch?.state === "running") return;
+        try {
+          const jobId = await api.startBatch(photos, settings);
+          set({ batch: { state: "running", jobId, fraction: 0, cancelling: false, count: photos.length } });
+        } catch (reason) {
+          set({ batch: { state: "failed", code: errorCode(reason) } });
+        }
+      },
+
+      async cancelBatch() {
+        const batch = get().batch;
+        if (batch?.state !== "running") return;
+        set({ batch: { ...batch, cancelling: true } });
+        await api.cancelJob(batch.jobId).catch(() => false);
+      },
+
+      dismissBatch: () => set({ batch: null }),
+
+      async startExpand(expansion, filterName) {
+        const { document, aiTask } = get();
+        if (!document || aiTask?.state === "running") return;
+        const suggested = `${document.path.replace(/\.[^.\\/]+$/, "")}-expanded.png`;
+        const path = await api.pickSavePath(filterName, "png", suggested);
+        if (!path) return;
+        try {
+          const jobId = await api.expandPhoto(expansion, path);
+          set({ aiTask: { kind: "expand", state: "running", jobId, fraction: 0, cancelling: false } });
+        } catch (reason) {
+          set({ aiTask: { kind: "expand", state: "failed", code: errorCode(reason) } });
+        }
+      },
+
+      async portraitPreset() {
+        if (!get().document) return;
+        await get().autoEnhance();
+        const live = get().live;
+        const next = {
+          ...live,
+          skinSmoothing: Math.max(live.skinSmoothing, 35),
+          blemishRemoval: Math.max(live.blemishRemoval, 50),
+          darkCircles: Math.max(live.darkCircles, 35),
+          eyeEnhance: Math.max(live.eyeEnhance, 30),
+          teethWhitening: Math.max(live.teethWhitening, 25),
+        };
+        set({ live: next, view: "editor" });
+        await adoptEdit(() => api.commitAdjustments(next));
+      },
+
+      async startCutout() {
+        if (!get().document) return;
+        set({ view: "editor" });
+        if (get().background?.state === "ready") {
+          await get().chooseBackground({ backgroundMode: "transparent" });
+          return;
+        }
+        set({ cutoutPending: true });
+        await get().startSeparation();
+        if (get().background?.state !== "running") set({ cutoutPending: false });
+      },
+
+      requestExport: (preset) => set({ exportPreset: preset, exportRequests: get().exportRequests + 1 }),
 
       clearRemoveStrokes: () => set({ removeStrokes: [] }),
 
@@ -1010,6 +1107,24 @@ export function createAppStore(api: Api) {
       },
 
       receiveJobUpdate(update) {
+        const batch = get().batch;
+        if (batch?.state === "running" && batch.jobId === update.id) {
+          switch (update.state) {
+            case "progress":
+              set({ batch: { ...batch, fraction: Math.max(batch.fraction, update.fraction) } });
+              break;
+            case "finished":
+              set({ batch: { state: "done", items: (update.result as BatchItem[] | null) ?? [] } });
+              break;
+            case "failed":
+              set({ batch: { state: "failed", code: update.code } });
+              break;
+            case "cancelled":
+              set({ batch: null });
+              break;
+          }
+          return;
+        }
         const task = get().aiTask;
         if (task?.state === "running" && task.jobId === update.id) {
           switch (update.state) {
@@ -1020,7 +1135,10 @@ export function createAppStore(api: Api) {
               set({ aiTask: null });
               const result = update.result as { patchId?: number; adjustments?: Adjustments } | null;
               let next: Adjustments | null = null;
-              if (task.kind === "remove" && typeof result?.patchId === "number") {
+              if (task.kind === "expand") {
+                const path = (update.result as { path?: string } | null)?.path;
+                if (path) void get().openPath(path);
+              } else if (task.kind === "remove" && typeof result?.patchId === "number") {
                 next = { ...get().live, removals: [...get().live.removals, result.patchId] };
                 set({ removeStrokes: [] });
               } else if (task.kind === "repair" && result?.adjustments) {
@@ -1089,14 +1207,18 @@ export function createAppStore(api: Api) {
               background: { state: "ready", provider: result?.provider ?? "cpu" },
               outdated: get().outdated.filter((name) => name !== "matte"),
             });
+            if (get().cutoutPending) {
+              set({ cutoutPending: false });
+              void get().chooseBackground({ backgroundMode: "transparent" });
+            }
             void refreshOverview(get().live).catch(() => undefined);
             break;
           }
           case "failed":
-            set({ background: { state: "failed", code: update.code } });
+            set({ background: { state: "failed", code: update.code }, cutoutPending: false });
             break;
           case "cancelled":
-            set({ background: { state: "none" } });
+            set({ background: { state: "none" }, cutoutPending: false });
             break;
         }
       },

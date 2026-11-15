@@ -164,6 +164,32 @@ export interface Adjustments {
   lut: LutChoice;
 }
 
+/** What batch editing does with every photo. */
+export interface BatchSettings {
+  adjustments: Adjustments;
+  /** Run the one-click enhancement on each photo first. */
+  autoEnhance: boolean;
+  export: ExportOptions;
+  folder: string;
+  /** Added to each name, e.g. "-edited". */
+  suffix: string;
+}
+
+/** How one photo of a batch went. */
+export interface BatchItem {
+  path: string;
+  output: string | null;
+  code: string | null;
+}
+
+/** How far to extend each side, as fractions of the width / height. */
+export interface Expansion {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
 /** A curve point: x (input) and y (output), 0–1. */
 export type CurvePoint = [number, number];
 
