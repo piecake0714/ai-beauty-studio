@@ -9,10 +9,10 @@
 namespace aibs {
 
 /// Decode an encoded image to 8-bit BGR: JPEG, PNG, TIFF and WebP through
-/// OpenCV, camera RAW files through LibRaw. `small` asks RAW decoding for
+/// OpenCV, camera RAW files through LibRaw. `reduced` asks RAW decoding for
 /// half size (faster, for thumbnails). Empty when the data is not an image
 /// this can read. Throws std::bad_alloc when memory runs out.
-cv::Mat decode_bgr(const uint8_t* bytes, size_t len, bool small);
+cv::Mat decode_bgr(const uint8_t* bytes, size_t len, bool reduced);
 
 /// True when the bytes start like a JPEG, PNG or WebP file (never RAW).
 bool plain_image(const uint8_t* bytes, size_t len);

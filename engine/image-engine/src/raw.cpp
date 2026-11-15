@@ -2,7 +2,7 @@
 //
 // JPEG, PNG and WebP go straight to OpenCV. Anything else is first offered
 // to LibRaw (camera RAW formats, many of which are TIFF containers that
-// OpenCV would misread or only show the small preview of); when LibRaw does
+// OpenCV would misread or only show the reduced preview of); when LibRaw does
 // not recognise it, OpenCV tries (plain TIFF). RAW files are developed with
 // the camera's white balance into 8-bit sRGB, turned upright.
 #include "decode_internal.h"
@@ -28,7 +28,7 @@ namespace aibs {
 
 namespace {
 
-cv::Mat decode_raw(const uint8_t* bytes, size_t len, bool small) {
+cv::Mat decode_raw(const uint8_t* bytes, size_t len, bool reduced) {
     // LibRaw is large; keep it off the stack.
     auto raw = std::make_unique<LibRaw>();
     if (raw->open_buffer(bytes, len) != LIBRAW_SUCCESS) return {};
@@ -40,7 +40,7 @@ cv::Mat decode_raw(const uint8_t* bytes, size_t len, bool small) {
     params.use_camera_wb = 1;
     params.output_color = 1;  // sRGB
     params.output_bps = 8;
-    params.half_size = small ? 1 : 0;
+    params.half_size = reduced ? 1 : 0;
     params.user_qual = 3;  // AHD demosaicing
     if (raw->dcraw_process() != LIBRAW_SUCCESS) return {};
     int error = LIBRAW_SUCCESS;
@@ -69,10 +69,10 @@ bool plain_image(const uint8_t* bytes, size_t len) {
     return starts("\xFF\xD8\xFF", 3) || starts("\x89PNG\r\n\x1a\n", 8) || (starts("RIFF", 4) && starts("WEBP", 4, 8));
 }
 
-cv::Mat decode_bgr(const uint8_t* bytes, size_t len, bool small) {
+cv::Mat decode_bgr(const uint8_t* bytes, size_t len, bool reduced) {
     if (bytes == nullptr || len == 0 || len > static_cast<size_t>(INT_MAX)) return {};
     if (!plain_image(bytes, len)) {
-        cv::Mat raw = decode_raw(bytes, len, small);
+        cv::Mat raw = decode_raw(bytes, len, reduced);
         if (!raw.empty()) return raw;
     }
     // Wraps the caller's buffer without copying; imdecode only reads it.
