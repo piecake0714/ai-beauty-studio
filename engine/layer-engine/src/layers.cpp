@@ -89,28 +89,9 @@ void draw_stroke(const aibs_stroke& stroke, cv::Mat& mask, double x, double y, d
     }
 }
 
-float soft_light_d(float b) {
-    return b <= 0.25f ? ((16.0f * b - 12.0f) * b + 4.0f) * b : std::sqrt(b);
-}
-
 }  // namespace
 
 namespace aibs {
-
-float blend_value(uint32_t mode, float b, float t) {
-    switch (mode) {
-        case AIBS_BLEND_MULTIPLY: return b * t;
-        case AIBS_BLEND_SCREEN: return b + t - b * t;
-        case AIBS_BLEND_OVERLAY: return b <= 0.5f ? 2.0f * b * t : 1.0f - 2.0f * (1.0f - b) * (1.0f - t);
-        case AIBS_BLEND_SOFT_LIGHT:
-            return t <= 0.5f ? b - (1.0f - 2.0f * t) * b * (1.0f - b) : b + (2.0f * t - 1.0f) * (soft_light_d(b) - b);
-        case AIBS_BLEND_DARKEN: return std::min(b, t);
-        case AIBS_BLEND_LIGHTEN: return std::max(b, t);
-        case AIBS_BLEND_DIFFERENCE: return std::abs(b - t);
-        case AIBS_BLEND_NORMAL:
-        default: return t;
-    }
-}
 
 cv::Mat layer_mask(const aibs_layer& layer, int cols, int rows, double x, double y, double scale_x, double scale_y,
                    int source_width, int source_height) {
