@@ -186,7 +186,7 @@ int32_t render_cover(const aibs_source& image, int photo_width, int photo_height
     Image rendered;
     const int32_t status = aibs_source_render(&image, (x - off_x) / cover, (y - off_y) / cover, cols / scale_x / cover,
                                               rows / scale_y / cover, static_cast<uint32_t>(cols),
-                                              static_cast<uint32_t>(rows), nullptr, nullptr, nullptr, nullptr, nullptr,
+                                              static_cast<uint32_t>(rows), nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
                                               0, 0, &rendered.img);
     if (status != AIBS_OK) return status;
     const cv::Mat rgba(rows, cols, CV_8UC4, rendered.img.data);
@@ -364,7 +364,7 @@ int32_t aibs_segment(const aibs_source* source, aibs_ai_session* model, aibs_mat
         // The model sees the whole image stretched to 1024 x 1024.
         Image input_image;
         int32_t status = aibs_source_render(source, 0, 0, full.cols, full.rows, kModelSize, kModelSize, nullptr,
-                                            nullptr, nullptr, nullptr, nullptr, 0, 0, &input_image.img);
+                                            nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &input_image.img);
         if (status != AIBS_OK) return status;
 
         // 1 x 3 x 1024 x 1024, planes R, G, B, ImageNet normalisation.

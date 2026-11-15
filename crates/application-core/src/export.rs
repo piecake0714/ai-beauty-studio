@@ -292,6 +292,27 @@ mod tests {
         let colour = engine_sys::Adjustments { exposure: 0.3, contrast: 20.0, vibrance: 15.0, ..Default::default() };
         let faces = [face];
         let spots = [Spot { x: 150.0, y: 120.0, radius: 9.0 }, Spot { x: 330.0, y: 200.0, radius: 6.0 }];
+        // A look: S curve, a red lift, blue shadows, and a warming LUT.
+        let master = [[0.0, 0.0], [0.25, 0.18], [0.75, 0.82], [1.0, 1.0]];
+        let red = [[0.0, 0.05], [1.0, 1.0]];
+        let n = 9usize;
+        let lut_values: Vec<f32> = (0..n * n * n)
+            .flat_map(|i| {
+                let (r, g, b) = ((i % n) as f32, ((i / n) % n) as f32, (i / n / n) as f32);
+                let d = (n - 1) as f32;
+                [(r / d * 1.08).min(1.0), g / d, b / d * 0.9]
+            })
+            .collect();
+        let lut = engine_sys::Lut::new(&lut_values, n as u32).unwrap();
+        let look = engine_sys::Look {
+            curves: [&master, &red, &[], &[]],
+            grade_hue: [220.0, 0.0, 35.0],
+            grade_saturation: [40.0, 0.0, 30.0],
+            grade_luminance: [0.0, 10.0, 0.0],
+            grade_balance: 10.0,
+            lut: Some(&lut),
+            lut_amount: 70.0,
+        };
         // A soft brush stroke across the middle on a darkening layer, and
         // a multiply image layer.
         let darker = engine_sys::Adjustments { exposure: -0.7, saturation: 30.0, ..Default::default() };
@@ -357,6 +378,7 @@ mod tests {
                     subject: None,
                     shape: Some(&shape),
                 }),
+                Some(&look),
                 &layers,
                 0,
             )
@@ -393,7 +415,7 @@ mod tests {
             200,
             20,
             8,
-            |x, y, w, h, ow, oh| source.render_adjusted(x, y, w, h, ow, oh, None, None, None, None, &[], 0),
+            |x, y, w, h, ow, oh| source.render_adjusted(x, y, w, h, ow, oh, None, None, None, None, None, &[], 0),
             |_| {
                 calls += 1;
                 if calls == 3 { Err(engine_sys::EngineError::Internal) } else { Ok(()) }
@@ -487,6 +509,7 @@ mod tests {
                         subject: None,
                         shape: Some(&shape),
                     }),
+                    None,
                     &layers,
                     0,
                 )
@@ -511,7 +534,7 @@ mod tests {
         let source = scene(300, 200);
         let region = (40u32, 30u32, 200u32, 120u32);
         let render = |x: f64, y: f64, w: f64, h: f64, ow: u32, oh: u32| {
-            source.render_adjusted(x, y, w, h, ow, oh, None, None, None, None, &[], 0)
+            source.render_adjusted(x, y, w, h, ow, oh, None, None, None, None, None, &[], 0)
         };
         let whole = render(40.0, 30.0, 200.0, 120.0, 200, 120).unwrap();
         let strips = render_in_strips(region, 200, 120, 25, 16, render, |_| Ok::<(), engine_sys::EngineError>(())).unwrap();

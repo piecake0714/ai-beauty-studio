@@ -1,9 +1,11 @@
 #include "aibs/engine.h"
 #include "../../color-engine/src/adjust.h"
+#include "../../color-engine/src/look.h"
 #include "../../background-engine/src/background.h"
 #include "../../layer-engine/src/layers.h"
 #include "../../light-engine/src/light.h"
 #include "../../portrait-engine/src/portrait.h"
+#include "decode_internal.h"
 #include "source_internal.h"
 
 #include <algorithm>
@@ -38,8 +40,7 @@ int32_t aibs_source_open(const uint8_t* bytes, size_t len, aibs_source** out) {
         return AIBS_ERR_INVALID_ARGUMENT;
     }
     try {
-        const cv::Mat encoded(1, static_cast<int>(len), CV_8UC1, const_cast<uint8_t*>(bytes));
-        cv::Mat full = cv::imdecode(encoded, cv::IMREAD_COLOR);
+        cv::Mat full = aibs::decode_bgr(bytes, len, false);
         if (full.empty()) {
             return AIBS_ERR_DECODE_FAILED;
         }
@@ -81,6 +82,7 @@ int32_t aibs_source_render(const aibs_source* source,
                            const aibs_adjustments* adjustments,
                            const aibs_background* background,
                            const aibs_light* light,
+                           const aibs_look* look,
                            const aibs_layer* layers,
                            uint32_t layer_count,
                            uint32_t original_columns,
@@ -150,6 +152,17 @@ int32_t aibs_source_render(const aibs_source* source,
                 cv::parallel_for_(cv::Range(0, padded.rows), [&](const cv::Range& range) {
                     for (int row = range.start; row < range.end; ++row) {
                         pipeline.apply_bgr(padded.ptr<uint8_t>(row) + 3 * first, count);
+                    }
+                });
+            }
+        }
+        if (look != nullptr && editing) {
+            const aibs::Look prepared(*look);
+            if (!prepared.identity()) {
+                const int count = padded.cols - first;
+                cv::parallel_for_(cv::Range(0, padded.rows), [&](const cv::Range& range) {
+                    for (int row = range.start; row < range.end; ++row) {
+                        prepared.apply_bgr(padded.ptr<uint8_t>(row) + 3 * first, count);
                     }
                 });
             }

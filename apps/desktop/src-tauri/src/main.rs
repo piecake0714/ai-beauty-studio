@@ -15,6 +15,7 @@ use application_core::models::{ModelInfo, ModelRef};
 use application_core::project::{self, AnalysisModels, ProjectError};
 use application_core::recovery::{Recovery, RecoveryInfo};
 use application_core::jobs::{JobError, Jobs};
+use application_core::looks::{LutEntry, LutLibrary};
 use application_core::models::Registry;
 use application_core::portrait::{self, FaceStatus};
 use application_core::info::{self, FileInfo};
@@ -62,6 +63,8 @@ struct OpenDocument {
     faces_model: Option<ModelRef>,
     matte_model: Option<ModelRef>,
     shape_model: Option<ModelRef>,
+    /// LUT presets and imported LUTs.
+    luts: Arc<LutLibrary>,
 }
 
 /// An image used by the edits; `source` is None when a project refers to an
@@ -80,6 +83,7 @@ struct RenderInputs {
     matte: Option<Arc<Matte>>,
     shape: Option<Arc<Shape>>,
     images: Vec<Option<Arc<Source>>>,
+    luts: Arc<LutLibrary>,
 }
 
 impl OpenDocument {
@@ -90,6 +94,7 @@ impl OpenDocument {
             matte: self.matte.clone(),
             shape: self.shape.clone(),
             images: self.images.iter().map(|b| b.source.clone()).collect(),
+            luts: self.luts.clone(),
         }
     }
 
@@ -185,6 +190,8 @@ impl RenderInputs {
         let images: Vec<Option<&Source>> = self.images.iter().map(|s| s.as_deref()).collect();
         let layers = prepared.layers(self.matte.as_deref(), &images);
         let spots = clamped.engine_spots();
+        let lut = self.luts.get(&clamped.lut.id);
+        let look = clamped.look(lut.as_deref());
         self.source.render_adjusted(
             x,
             y,
@@ -196,6 +203,7 @@ impl RenderInputs {
             Some(&colour),
             background,
             light,
+            look.as_ref(),
             &layers,
             original_columns,
         )
@@ -235,6 +243,8 @@ struct AppState {
     recovery: Recovery,
     /// The file given on the command line, until the UI asks for it.
     launch_path: Mutex<Option<String>>,
+    /// LUT presets and imported LUTs.
+    luts: Arc<LutLibrary>,
 }
 
 impl AppState {
@@ -359,6 +369,7 @@ fn install(app: &tauri::AppHandle, state: &AppState, opening: Opening) -> Result
         faces_model: opening.models[0].clone(),
         matte_model: opening.models[1].clone(),
         shape_model: opening.models[2].clone(),
+        luts: state.luts.clone(),
     });
     // The previous document's recovery no longer applies.
     state.recovery.discard();
@@ -950,6 +961,21 @@ async fn add_background_image(path: String, state: State<'_, AppState>) -> Resul
     Ok(document.images.len() as u32)
 }
 
+/// The LUT presets and the user's imported LUTs.
+#[tauri::command]
+fn list_luts(state: State<'_, AppState>) -> Vec<LutEntry> {
+    state.luts.list()
+}
+
+/// Check a .cube file and add it to the LUT library.
+#[tauri::command]
+async fn import_lut(path: String, state: State<'_, AppState>) -> Result<LutEntry, String> {
+    let luts = state.luts.clone();
+    tauri::async_runtime::spawn_blocking(move || luts.import(Path::new(&path)))
+        .await
+        .map_err(|_| "internal".to_string())?
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ModelOverview {
@@ -1143,6 +1169,7 @@ fn main() {
                 depth_model: Arc::new(ModelSlot::new(separation::DEPTH_MODEL)),
                 recovery,
                 launch_path: Mutex::new(launch_path_from(std::env::args().skip(1))),
+                luts: Arc::new(LutLibrary::new(app.path().app_data_dir()?.join("luts"))),
             });
             Ok(())
         })
@@ -1172,6 +1199,8 @@ fn main() {
             model_overview,
             verify_models,
             unload_models,
+            list_luts,
+            import_lut,
             background_status,
             add_background_image,
             thumbnail,

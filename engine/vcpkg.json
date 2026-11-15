@@ -5,7 +5,16 @@
     {
       "name": "opencv4",
       "default-features": false,
-      "features": ["jpeg", "png", "tiff", "webp"]
+      "features": [
+        "jpeg",
+        "png",
+        "tiff",
+        "webp"
+      ]
+    },
+    {
+      "name": "libraw",
+      "default-features": false
     }
   ]
 }

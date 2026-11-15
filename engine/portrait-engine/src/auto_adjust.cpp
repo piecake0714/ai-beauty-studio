@@ -48,7 +48,7 @@ int32_t aibs_auto_adjust(const aibs_source* source, const aibs_face* faces, uint
         const auto h = static_cast<uint32_t>(std::max(1.0, std::round(full.rows * scale)));
         Image small;
         const int32_t status =
-            aibs_source_render(source, 0, 0, full.cols, full.rows, w, h, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &small.img);
+            aibs_source_render(source, 0, 0, full.cols, full.rows, w, h, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &small.img);
         if (status != AIBS_OK) return status;
 
         // Brightness histogram (display luma) and neutral-colour averages.

@@ -51,7 +51,7 @@ bool open_mat(const cv::Mat& bgr, Source& source) {
 
 bool render(const Source& source, int w, int h, const aibs_light* light, Image& out, uint32_t split = 0) {
     return aibs_source_render(source.ptr, 0, 0, w, h, static_cast<uint32_t>(w), static_cast<uint32_t>(h), nullptr,
-                              nullptr, nullptr, light, nullptr, 0, split, &out.img) == AIBS_OK;
+                              nullptr, nullptr, light, nullptr, nullptr, 0, split, &out.img) == AIBS_OK;
 }
 
 aibs_light make_light(uint32_t type, float x, float y) {
@@ -107,7 +107,7 @@ void test_flat_light() {
     }
     // The same light at 2x zoom on a crop matches.
     Image zoomed;
-    CHECK(aibs_source_render(source.ptr, 10, 40, 20, 20, 40, 40, nullptr, nullptr, nullptr, &light, nullptr, 0, 0, &zoomed.img) ==
+    CHECK(aibs_source_render(source.ptr, 10, 40, 20, 20, 40, 40, nullptr, nullptr, nullptr, &light, nullptr, nullptr, 0, 0, &zoomed.img) ==
           AIBS_OK);
     if (zoomed.img.data && lit.img.data) CHECK(std::abs(zoomed.green(21, 21) - lit.green(20, 50)) <= 2);
 }

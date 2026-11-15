@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { LayersSection } from "./LayersSection";
+import { LookSection } from "./LookSection";
 import {
   BANDS,
   BEGINNER,
@@ -477,6 +478,8 @@ export function AdjustPanel() {
           </>
         )}
       </section>
+
+      <LookSection advanced={advanced} />
 
       <LayersSection />
 

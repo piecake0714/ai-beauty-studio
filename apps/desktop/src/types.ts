@@ -72,7 +72,7 @@ export interface ModelOverview {
 export interface FileInfo {
   name: string;
   sizeBytes: number;
-  format: "JPEG" | "PNG" | "TIFF" | "WebP" | null;
+  format: "JPEG" | "PNG" | "TIFF" | "WebP" | "RAW" | null;
 }
 
 export interface Startup {
@@ -149,6 +149,57 @@ export interface Adjustments {
   layers: Layer[];
   /** The kept part of the photo, as fractions of its width and height. */
   crop: Crop;
+  /** RGB curves, after the colour adjustments. */
+  curves: Curves;
+  /** Three-way colour grading. */
+  grading: Grading;
+  /** The chosen LUT (empty id for none). */
+  lut: LutChoice;
+}
+
+/** A curve point: x (input) and y (output), 0–1. */
+export type CurvePoint = [number, number];
+
+export interface Curves {
+  master: CurvePoint[];
+  red: CurvePoint[];
+  green: CurvePoint[];
+  blue: CurvePoint[];
+}
+
+export type CurveChannel = keyof Curves;
+
+export interface GradeRange {
+  /** 0–360 degrees. */
+  hue: number;
+  /** 0–100. */
+  saturation: number;
+  /** -100 to +100. */
+  luminance: number;
+}
+
+export interface Grading {
+  shadows: GradeRange;
+  midtones: GradeRange;
+  highlights: GradeRange;
+  /** -100 (more counts as shadows) to +100 (more as highlights). */
+  balance: number;
+}
+
+export type GradeRangeName = "shadows" | "midtones" | "highlights";
+
+export interface LutChoice {
+  /** "builtin:<name>", "user:<name>", or "" for none. */
+  id: string;
+  /** 0–100. */
+  amount: number;
+}
+
+/** A LUT that can be chosen. */
+export interface LutEntry {
+  id: string;
+  name: string;
+  builtin: boolean;
 }
 
 /** A healing spot: the round area of `radius` source pixels around (x, y)
@@ -227,6 +278,9 @@ export type ScalarAdjustment = Exclude<
   | "layers"
   | "crop"
   | "spots"
+  | "curves"
+  | "grading"
+  | "lut"
 >;
 export type BandAdjustment = "hslHue" | "hslSaturation" | "hslLuminance";
 
@@ -269,6 +323,14 @@ export const NO_ADJUSTMENTS: Adjustments = Object.freeze({
   lightSubjectOnly: false,
   layers: Object.freeze([]) as unknown as Layer[],
   crop: Object.freeze({ x: 0, y: 0, width: 1, height: 1 }),
+  curves: Object.freeze({ master: [], red: [], green: [], blue: [] }) as unknown as Curves,
+  grading: Object.freeze({
+    shadows: Object.freeze({ hue: 0, saturation: 0, luminance: 0 }),
+    midtones: Object.freeze({ hue: 0, saturation: 0, luminance: 0 }),
+    highlights: Object.freeze({ hue: 0, saturation: 0, luminance: 0 }),
+    balance: 0,
+  }) as Grading,
+  lut: Object.freeze({ id: "", amount: 0 }),
 }) as Adjustments;
 
 /** Face detection for the open image. */

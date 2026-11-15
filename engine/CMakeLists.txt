@@ -8,6 +8,8 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 
 find_package(OpenCV CONFIG REQUIRED COMPONENTS core imgproc imgcodecs)
+# Camera RAW decoding (LibRaw, used under CDDL-1.0; linked statically).
+find_package(libraw CONFIG REQUIRED)
 
 # ONNX Runtime with DirectML, from the extracted NuGet packages
 # Microsoft.ML.OnnxRuntime.DirectML and Microsoft.AI.DirectML (see CI).
@@ -36,7 +38,9 @@ endforeach()
 add_library(aibs_engine SHARED
     image-engine/src/decode.cpp
     image-engine/src/source.cpp
+    image-engine/src/raw.cpp
     color-engine/src/adjust.cpp
+    color-engine/src/look.cpp
     gpu-engine/src/gpu.cpp
     ai-runtime/src/session.cpp
     portrait-engine/src/yunet_decode.cpp
@@ -51,7 +55,8 @@ add_library(aibs_engine SHARED
 )
 target_include_directories(aibs_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_definitions(aibs_engine PRIVATE AIBS_BUILD)
-target_link_libraries(aibs_engine PRIVATE opencv_core opencv_imgproc opencv_imgcodecs onnxruntime dxgi)
+target_link_libraries(aibs_engine PRIVATE opencv_core opencv_imgproc opencv_imgcodecs libraw::raw_r onnxruntime dxgi)
+target_compile_definitions(aibs_engine PRIVATE LIBRAW_NODLL)
 if(MSVC)
     # Loaded explicitly from the engine's folder at first use (session.cpp).
     target_link_options(aibs_engine PRIVATE "/DELAYLOAD:onnxruntime.dll")

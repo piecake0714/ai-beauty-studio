@@ -48,6 +48,7 @@ extern "C" {
         adjustments: *const Adjustments,
         background: *const BackgroundRaw,
         light: *const LightRaw,
+        look: *const LookRaw,
         layers: *const LayerRaw,
         layer_count: u32,
         original_columns: u32,
@@ -141,6 +142,126 @@ extern "C" {
     fn aibs_ai_close(session: *mut AiSessionRaw);
     fn aibs_adjust_rgb8(adjustments: *const Adjustments, input: *const u8, output: *mut u8, pixel_count: usize) -> i32;
     fn aibs_source_free(source: *mut AibsSourceRaw);
+    fn aibs_lut_create(rgb: *const f32, size: u32, out: *mut *mut LutRaw) -> i32;
+    fn aibs_lut_free(lut: *mut LutRaw);
+    fn aibs_look_rgb8(look: *const LookRaw, input: *const u8, output: *mut u8, pixel_count: usize) -> i32;
+}
+
+/// Points per RGB curve.
+pub const CURVE_POINTS: usize = 16;
+
+#[repr(C)]
+struct LutRaw {
+    _private: [u8; 0],
+}
+
+/// A 3D colour lookup table, made by [`Lut::new`]; read-only after.
+pub struct Lut {
+    raw: *mut LutRaw,
+    size: u32,
+}
+
+// SAFETY: a LUT is read-only after creation; the engine reads it from any
+// thread.
+unsafe impl Send for Lut {}
+unsafe impl Sync for Lut {}
+
+impl Lut {
+    /// A LUT from size^3 RGB triples (0..1, red changing fastest, then green,
+    /// then blue, as in .cube files); size 2 to 65.
+    pub fn new(rgb: &[f32], size: u32) -> Result<Lut, EngineError> {
+        if !(2..=65).contains(&size) || rgb.len() != (size as usize).pow(3) * 3 {
+            return Err(EngineError::InvalidArgument);
+        }
+        let mut raw: *mut LutRaw = std::ptr::null_mut();
+        // SAFETY: `rgb` holds size^3 * 3 floats; `raw` is writable.
+        status_to_result(unsafe { aibs_lut_create(rgb.as_ptr(), size, &mut raw) })?;
+        Ok(Lut { raw, size })
+    }
+
+    pub fn size(&self) -> u32 {
+        self.size
+    }
+}
+
+impl Drop for Lut {
+    fn drop(&mut self) {
+        // SAFETY: `raw` came from aibs_lut_create and is freed once.
+        unsafe { aibs_lut_free(self.raw) };
+    }
+}
+
+impl std::fmt::Debug for Lut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Lut").field("size", &self.size).finish()
+    }
+}
+
+/// A look applied after the adjustments: colour grading, then RGB curves
+/// (master, red, green, blue), then a LUT.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Look<'a> {
+    /// Master, red, green, blue: (x, y) points 0..1, x increasing (at
+    /// most [`CURVE_POINTS`]; fewer than 2 is straight).
+    pub curves: [&'a [[f32; 2]]; 4],
+    /// Shadows, midtones, highlights: hue 0..360, saturation 0..100,
+    /// luminance -100..100.
+    pub grade_hue: [f32; 3],
+    pub grade_saturation: [f32; 3],
+    pub grade_luminance: [f32; 3],
+    /// -100..100.
+    pub grade_balance: f32,
+    pub lut: Option<&'a Lut>,
+    /// 0..100.
+    pub lut_amount: f32,
+}
+
+#[repr(C)]
+struct LookRaw {
+    curves: [[f32; 2 * CURVE_POINTS]; 4],
+    curve_points: [u32; 4],
+    grade_hue: [f32; 3],
+    grade_saturation: [f32; 3],
+    grade_luminance: [f32; 3],
+    grade_balance: f32,
+    lut: *const LutRaw,
+    lut_amount: f32,
+}
+
+impl Look<'_> {
+    fn raw(&self) -> LookRaw {
+        let mut curves = [[0.0f32; 2 * CURVE_POINTS]; 4];
+        let mut curve_points = [0u32; 4];
+        for (i, curve) in self.curves.iter().enumerate() {
+            let n = curve.len().min(CURVE_POINTS);
+            for (j, point) in curve.iter().take(n).enumerate() {
+                curves[i][2 * j] = point[0];
+                curves[i][2 * j + 1] = point[1];
+            }
+            curve_points[i] = n as u32;
+        }
+        LookRaw {
+            curves,
+            curve_points,
+            grade_hue: self.grade_hue,
+            grade_saturation: self.grade_saturation,
+            grade_luminance: self.grade_luminance,
+            grade_balance: self.grade_balance,
+            lut: self.lut.map_or(std::ptr::null(), |l| l.raw as *const LutRaw),
+            lut_amount: self.lut_amount,
+        }
+    }
+
+    /// Apply the look to packed 8-bit RGB pixels in place, exactly as
+    /// rendering does.
+    pub fn apply_rgb8(&self, rgb: &mut [u8]) {
+        let raw = self.raw();
+        let count = rgb.len() / 3;
+        // SAFETY: `rgb` holds at least `count * 3` bytes; the engine reads and
+        // writes exactly that many and allows input and output to be the same.
+        let status = unsafe { aibs_look_rgb8(&raw, rgb.as_ptr(), rgb.as_mut_ptr(), count) };
+        debug_assert_eq!(status, 0);
+    }
 }
 
 /// Number of HSL colour bands: red, orange, yellow, green, aqua, blue,
@@ -958,7 +1079,7 @@ impl Source {
         out_width: u32,
         out_height: u32,
     ) -> Result<RgbaImage, EngineError> {
-        self.render_adjusted(x, y, w, h, out_width, out_height, None, None, None, None, &[], 0)
+        self.render_adjusted(x, y, w, h, out_width, out_height, None, None, None, None, None, &[], 0)
     }
 
     /// Like [`Source::render`], applying portrait retouching, then
@@ -977,9 +1098,12 @@ impl Source {
         adjustments: Option<&Adjustments>,
         background: Option<Background<'_>>,
         light: Option<Light<'_>>,
+        look: Option<&Look<'_>>,
         layers: &[Layer<'_>],
         original_columns: u32,
     ) -> Result<RgbaImage, EngineError> {
+        let look_raw = look.map(|l| l.raw());
+        let look_ptr = look_raw.as_ref().map_or(std::ptr::null(), |l| l as *const LookRaw);
         let raw_layers = raw_layers(layers);
         let light_raw = light.map(|l| l.raw());
         let light_ptr = light_raw.as_ref().map_or(std::ptr::null(), |l| l as *const LightRaw);
@@ -1014,6 +1138,7 @@ impl Source {
                 adjustments_ptr,
                 background_ptr,
                 light_ptr,
+                look_ptr,
                 raw_layers.layers.as_ptr(),
                 raw_layers.layers.len() as u32,
                 original_columns,
@@ -1220,19 +1345,52 @@ mod tests {
     }
 
     #[test]
+    fn looks_render_like_apply_rgb8_and_luts_check_their_size() {
+        assert!(matches!(Lut::new(&[0.0; 3], 1), Err(EngineError::InvalidArgument)));
+        assert!(matches!(Lut::new(&[0.0; 10], 2), Err(EngineError::InvalidArgument)));
+        let identity: Vec<f32> = (0..8).flat_map(|i| [(i & 1) as f32, ((i >> 1) & 1) as f32, ((i >> 2) & 1) as f32]).collect();
+        let lut = Lut::new(&identity, 2).unwrap();
+        assert_eq!(lut.size(), 2);
+
+        let source = Source::open(PNG).unwrap();
+        let original = source.render(0.0, 0.0, 64.0, 48.0, 64, 48).unwrap();
+        let empty = Look::default();
+        let same = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, None, None, None, Some(&empty), &[], 0).unwrap();
+        assert_eq!(same.pixels, original.pixels);
+
+        let curve = [[0.0, 0.1], [0.5, 0.6], [1.0, 0.9]];
+        let look = Look {
+            curves: [&curve, &[], &[], &[[0.0, 0.0], [1.0, 0.8]]],
+            grade_hue: [200.0, 0.0, 40.0],
+            grade_saturation: [50.0, 0.0, 50.0],
+            lut: Some(&lut),
+            lut_amount: 100.0,
+            ..Default::default()
+        };
+        let out = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, None, None, None, Some(&look), &[], 0).unwrap();
+        for (x, y) in [(0usize, 0usize), (20, 10), (63, 47)] {
+            let p = (y * 64 + x) * 4;
+            let mut expected = [original.pixels[p], original.pixels[p + 1], original.pixels[p + 2]];
+            look.apply_rgb8(&mut expected);
+            assert_eq!(&out.pixels[p..p + 3], &expected);
+        }
+        assert_ne!(out.pixels, original.pixels);
+    }
+
+    #[test]
     fn adjustments_match_adjust_rgb8_and_respect_the_split() {
         let source = Source::open(PNG).unwrap();
         let original = source.render(0.0, 0.0, 64.0, 48.0, 64, 48).unwrap();
         let zero = Adjustments::default();
         let unchanged = source
-            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&zero), None, None, &[], 0)
+            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&zero), None, None, None, &[], 0)
             .unwrap();
         assert_eq!(unchanged.pixels, original.pixels);
 
         let mut look = Adjustments { exposure: -1.0, saturation: 40.0, ..Default::default() };
         look.hsl_hue[0] = 50.0;
         let split = source
-            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&look), None, None, &[], 32)
+            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&look), None, None, None, &[], 32)
             .unwrap();
         for col in [0usize, 31, 32, 63] {
             let p = (10 * 64 + col) * 4;
@@ -1303,7 +1461,7 @@ mod tests {
         let source = Source::open(PNG).unwrap();
         let plain = source.render(0.0, 0.0, 64.0, 48.0, 64, 48).unwrap();
         let portrait = Portrait { faces: &[], smoothing: 100.0, ..Default::default() };
-        let with = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, Some(portrait), None, None, None, &[], 0).unwrap();
+        let with = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, Some(portrait), None, None, None, None, &[], 0).unwrap();
         assert_eq!(plain.pixels, with.pixels);
     }
 
@@ -1346,7 +1504,7 @@ mod tests {
             image: None,
             detail: 0.0,
         };
-        let out = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, None, Some(background), None, &[], 0).unwrap();
+        let out = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, None, Some(background), None, None, &[], 0).unwrap();
         let at = |image: &RgbaImage, x: usize, y: usize| image.pixels[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4].to_vec();
         assert_eq!(at(&out, 5, 10), at(&plain, 5, 10));
         assert_eq!(at(&out, 60, 10), vec![1, 2, 3, 255]);
@@ -1370,7 +1528,7 @@ mod tests {
             subject: None,
             shape: Some(&shape),
         };
-        let lit = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, None, None, Some(light), &[], 0).unwrap();
+        let lit = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, None, None, Some(light), None, &[], 0).unwrap();
         let green = |image: &RgbaImage, x: usize, y: usize| image.pixels[(y * 64 + x) * 4 + 1];
         assert!(green(&lit, 6, 24) > green(&plain, 6, 24));
         assert_eq!(Shape::from_depth(&depth, 10, 10, 64, 48).unwrap_err(), EngineError::InvalidArgument);
@@ -1415,7 +1573,7 @@ mod tests {
             matte: None,
             strokes: &strokes,
         };
-        let out = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, None, None, None, &[layer], 0).unwrap();
+        let out = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, None, None, None, None, &[layer], 0).unwrap();
         let green = |image: &RgbaImage, x: usize, y: usize| image.pixels[(y * 64 + x) * 4 + 1];
         assert!(green(&out, 30, 24) > green(&plain, 30, 24));
         assert_eq!(green(&out, 30, 5), green(&plain, 30, 5));
