@@ -121,7 +121,9 @@ int32_t aibs_source_render(const aibs_source* source,
         // A background blur needs real neighbours beyond the visible
         // region, so render a margin around it and crop it off at the end.
         const bool composite = original_columns < out_width && aibs::background_active(background);
-        const int pad = composite ? aibs::background_margin(*background, full.cols, full.rows, scale_x, scale_y) : 0;
+        const bool editing = original_columns < out_width;
+        const int pad = std::max(composite ? aibs::background_margin(*background, full.cols, full.rows, scale_x, scale_y) : 0,
+                                 editing ? aibs::spot_margin(portrait, scale_x, scale_y) : 0);
         const double px = x - pad / scale_x;
         const double py = y - pad / scale_y;
         const int cols = static_cast<int>(out_width) + 2 * pad;
@@ -136,8 +138,10 @@ int32_t aibs_source_render(const aibs_source* source,
 
         // Retouch skin, adjust, light, then composite the background; all only
         // right of the before/after split.
-        if (portrait != nullptr && original_columns < out_width) {
+        if (portrait != nullptr && editing) {
+            aibs::heal_spots(padded, first, px, py, scale_x, scale_y, full.cols, full.rows, *portrait);
             aibs::retouch_faces(padded, first, px, py, scale_x, scale_y, *portrait);
+            aibs::retouch_features(padded, first, px, py, scale_x, scale_y, *portrait);
         }
         if (adjustments != nullptr && original_columns < out_width) {
             const aibs::Pipeline pipeline(*adjustments);

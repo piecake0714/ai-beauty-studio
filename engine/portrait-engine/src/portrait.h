@@ -44,4 +44,27 @@ std::vector<Detection> remove_overlaps(std::vector<Detection> faces, float max_o
 void retouch_faces(cv::Mat& bgr, int first_col, double x, double y, double scale_x, double scale_y,
                    const aibs_portrait& portrait);
 
+/// Fade small dark or red spots on skin (blemishes). `image` is the float
+/// BGR (0..1) region being retouched, `ycrcb` the same region in 8-bit
+/// YCrCb, `mask` where the skin is (0..1).
+void reduce_blemishes(cv::Mat& image, const cv::Mat& ycrcb, const cv::Mat& mask, double face_px, double strength);
+
+/// Dark circles, eyes and teeth, per face, in the same coordinates as
+/// retouch_faces.
+void retouch_features(cv::Mat& bgr, int first_col, double x, double y, double scale_x, double scale_y,
+                      const aibs_portrait& portrait);
+
+/// Largest healing-spot margin, in output pixels.
+constexpr int kMaxSpotMargin = 1024;
+
+/// Extra output pixels needed on every side of a render so healing spots
+/// near its edges find the same texture as in any other render.
+int spot_margin(const aibs_portrait* portrait, double scale_x, double scale_y);
+
+/// Heal the portrait's spots, in the same coordinates as retouch_faces;
+/// texture is only taken from inside the source_width x source_height
+/// photo.
+void heal_spots(cv::Mat& bgr, int first_col, double x, double y, double scale_x, double scale_y, int source_width,
+                int source_height, const aibs_portrait& portrait);
+
 }  // namespace aibs

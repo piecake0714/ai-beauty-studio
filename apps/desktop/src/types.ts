@@ -109,6 +109,13 @@ export interface Adjustments {
   hslLuminance: number[];
   /** Portrait skin smoothing on detected faces, 0 (off) to 100. */
   skinSmoothing: number;
+  /** Portrait tools on detected faces, 0 (off) to 100. */
+  blemishRemoval: number;
+  darkCircles: number;
+  eyeEnhance: number;
+  teethWhitening: number;
+  /** Healing spots, in source pixels. */
+  spots: HealSpot[];
   /** Background treatment; applies once subject and background are separated. */
   backgroundMode: BackgroundMode;
   /** R, G, B (0–255) for the "color" mode. */
@@ -122,6 +129,8 @@ export interface Adjustments {
   backgroundImage: number;
   /** -100 (pull the subject's edge in) to +100 (push it out). */
   backgroundEdge: number;
+  /** 0–100: the subject's edge follows fine detail such as hair. */
+  backgroundDetail: number;
   lightKind: LightKind;
   /** Light position as a fraction of the image width / height. */
   lightX: number;
@@ -140,6 +149,14 @@ export interface Adjustments {
   layers: Layer[];
   /** The kept part of the photo, as fractions of its width and height. */
   crop: Crop;
+}
+
+/** A healing spot: the round area of `radius` source pixels around (x, y)
+ * takes matching texture from nearby. */
+export interface HealSpot {
+  x: number;
+  y: number;
+  radius: number;
 }
 
 export interface Crop {
@@ -209,6 +226,7 @@ export type ScalarAdjustment = Exclude<
   | "lightSubjectOnly"
   | "layers"
   | "crop"
+  | "spots"
 >;
 export type BandAdjustment = "hslHue" | "hslSaturation" | "hslLuminance";
 
@@ -228,6 +246,11 @@ export const NO_ADJUSTMENTS: Adjustments = Object.freeze({
   hslSaturation: Object.freeze(new Array(HSL_BANDS).fill(0)) as number[],
   hslLuminance: Object.freeze(new Array(HSL_BANDS).fill(0)) as number[],
   skinSmoothing: 0,
+  blemishRemoval: 0,
+  darkCircles: 0,
+  eyeEnhance: 0,
+  teethWhitening: 0,
+  spots: Object.freeze([]) as unknown as HealSpot[],
   backgroundMode: "original",
   backgroundColor: Object.freeze([0, 0, 0]) as unknown as [number, number, number],
   backgroundBlur: 0,
@@ -235,6 +258,7 @@ export const NO_ADJUSTMENTS: Adjustments = Object.freeze({
   backgroundSaturation: 0,
   backgroundImage: 0,
   backgroundEdge: 0,
+  backgroundDetail: 0,
   lightKind: "none",
   lightX: 0,
   lightY: 0,

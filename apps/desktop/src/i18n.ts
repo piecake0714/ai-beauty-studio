@@ -301,6 +301,15 @@ const zhHant = {
   "crop.original": "原始",
   "crop.reset": "還原",
   "crop.apply": "套用裁切",
+  "adjust.blemishRemoval": "去除瑕疵",
+  "adjust.darkCircles": "淡化黑眼圈",
+  "adjust.eyeEnhance": "亮眼",
+  "adjust.teethWhitening": "牙齒美白",
+  "adjust.backgroundDetail": "髮絲邊緣精修",
+  "heal.tool": "修復筆刷",
+  "heal.clear": "清除修復點（{count}）",
+  "heal.hint": "在相片上點一下要修掉的痘痘、斑點或雜物，會用附近相似的紋理取代。",
+  "heal.size": "修復大小",
   "error.internal": "發生內部錯誤。",
 };
 
@@ -598,6 +607,15 @@ const en: Record<keyof typeof zhHant, string> = {
   "crop.original": "Original",
   "crop.reset": "Reset",
   "crop.apply": "Apply crop",
+  "adjust.blemishRemoval": "Blemish removal",
+  "adjust.darkCircles": "Dark circles",
+  "adjust.eyeEnhance": "Brighten eyes",
+  "adjust.teethWhitening": "Whiten teeth",
+  "adjust.backgroundDetail": "Hair edge detail",
+  "heal.tool": "Healing brush",
+  "heal.clear": "Clear spots ({count})",
+  "heal.hint": "Click a spot, blemish or small object on the photo to replace it with similar texture from nearby.",
+  "heal.size": "Healing size",
   "error.internal": "An internal error occurred.",
 };
 

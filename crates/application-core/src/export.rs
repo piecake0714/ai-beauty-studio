@@ -235,7 +235,7 @@ mod tests {
         assert_eq!(fs::read(&out).unwrap(), b"new");
     }
 
-    use engine_sys::{Background, BackgroundMode, Face, Light, LightKind, Matte, Portrait, Shape, Source};
+    use engine_sys::{Background, BackgroundMode, Face, Light, LightKind, Matte, Portrait, Shape, Source, Spot};
 
     /// A drawn test scene (no photographs): grey background, a skin-coloured
     /// oval with blotches, a darker "subject" half for the matte.
@@ -291,6 +291,7 @@ mod tests {
         let shape = Shape::from_depth(&depth, w, h, w, h).unwrap();
         let colour = engine_sys::Adjustments { exposure: 0.3, contrast: 20.0, vibrance: 15.0, ..Default::default() };
         let faces = [face];
+        let spots = [Spot { x: 150.0, y: 120.0, radius: 9.0 }, Spot { x: 330.0, y: 200.0, radius: 6.0 }];
         // A soft brush stroke across the middle on a darkening layer, and
         // a multiply image layer.
         let darker = engine_sys::Adjustments { exposure: -0.7, saturation: 30.0, ..Default::default() };
@@ -325,7 +326,15 @@ mod tests {
                 rh,
                 ow,
                 oh,
-                Some(Portrait { faces: &faces, smoothing: 100.0 }),
+                Some(Portrait {
+                    faces: &faces,
+                    smoothing: 100.0,
+                    blemishes: 80.0,
+                    dark_circles: 70.0,
+                    eyes: 60.0,
+                    teeth: 60.0,
+                    spots: &spots,
+                }),
                 Some(&colour),
                 Some(Background {
                     matte: &matte,
@@ -335,6 +344,7 @@ mod tests {
                     saturation: 0.0,
                     edge: 0.0,
                     image: None,
+                    detail: 70.0,
                 }),
                 Some(Light {
                     kind: LightKind::Softbox,
@@ -417,6 +427,8 @@ mod tests {
         let shape = Shape::from_depth(&depth, 1024, 768, w, h).unwrap();
         let colour = engine_sys::Adjustments { exposure: 0.3, contrast: 20.0, ..Default::default() };
         let faces = [face];
+        let spots: Vec<Spot> =
+            (0..200).map(|i| Spot { x: 100.0 + (i % 20) as f32 * 190.0, y: 100.0 + (i / 20) as f32 * 280.0, radius: 25.0 }).collect();
         let darker = engine_sys::Adjustments { exposure: -0.5, ..Default::default() };
         let points = [500.0, 2500.0, 3500.0, 2600.0];
         let strokes = [engine_sys::Stroke { points: &points, size: 400.0, hardness: 0.5, opacity: 1.0, erase: false }];
@@ -444,7 +456,15 @@ mod tests {
                     rh,
                     ow,
                     oh,
-                    Some(Portrait { faces: &faces, smoothing: 60.0 }),
+                    Some(Portrait {
+                        faces: &faces,
+                        smoothing: 60.0,
+                        blemishes: 50.0,
+                        dark_circles: 50.0,
+                        eyes: 50.0,
+                        teeth: 50.0,
+                        spots: &spots,
+                    }),
                     Some(&colour),
                     Some(Background {
                         matte: &matte,
@@ -454,6 +474,7 @@ mod tests {
                         saturation: 0.0,
                         edge: 0.0,
                         image: None,
+                        detail: 40.0,
                     }),
                     Some(Light {
                         kind: LightKind::Softbox,

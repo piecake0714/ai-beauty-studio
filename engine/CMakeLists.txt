@@ -42,6 +42,7 @@ add_library(aibs_engine SHARED
     portrait-engine/src/yunet_decode.cpp
     portrait-engine/src/detect.cpp
     portrait-engine/src/retouch.cpp
+    portrait-engine/src/features.cpp
     portrait-engine/src/auto_adjust.cpp
     background-engine/src/background.cpp
     light-engine/src/light.cpp

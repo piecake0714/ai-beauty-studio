@@ -67,6 +67,12 @@ cv::Mat wide_blur(const cv::Mat& image, double sigma, int origin_x, int origin_y
     return out(cv::Rect(left, top, image.cols, image.rows)).clone();
 }
 
+// Guided-filter radius for edge detail: wide enough that its windows reach
+// across the edge, so the matte takes on the picture's fine structure there.
+int detail_radius(double reach) {
+    return std::max(2, static_cast<int>(std::lround(0.01 * reach)));
+}
+
 cv::Mat box(const cv::Mat& m, int radius) {
     cv::Mat out;
     cv::boxFilter(m, out, -1, cv::Size(2 * radius + 1, 2 * radius + 1), cv::Point(-1, -1), true,
@@ -129,6 +135,30 @@ void shift_edge(cv::Mat& m, float edge) {
     cv::LUT(m, table, m);
 }
 
+// Make the soft edge of the matte follow fine detail of the picture (hair)
+// more closely: a guided filter at the scale of a few strands, guided by the
+// rendered image, used only in the uncertain band around the edge.
+void refine_detail(cv::Mat& m, const cv::Mat& bgr, float detail, double reach) {
+    const double d = std::isfinite(detail) ? std::clamp(static_cast<double>(detail), 0.0, 100.0) / 100.0 : 0.0;
+    if (d <= 0.0) return;
+    cv::Mat partial;
+    cv::inRange(m, cv::Scalar(1), cv::Scalar(254), partial);
+    if (cv::countNonZero(partial) == 0) return;
+    const int radius = detail_radius(reach);
+    cv::Mat grey, guide, alpha;
+    cv::cvtColor(bgr, grey, cv::COLOR_BGR2GRAY);
+    grey.convertTo(guide, CV_32F, 1.0 / 255.0);
+    m.convertTo(alpha, CV_32F, 1.0 / 255.0);
+    const cv::Mat followed = guided(guide, alpha, radius, 1e-4);
+    // The band: where the matte is soft, widened a little.
+    cv::Mat band;
+    partial.convertTo(band, CV_32F, 1.0 / 255.0);
+    band = box(band, radius);
+    cv::Mat result = alpha + (band * d).mul(followed - alpha);
+    cv::min(cv::max(result, 0.0), 1.0, result);
+    result.convertTo(m, CV_8U, 255.0);
+}
+
 }  // namespace
 
 namespace aibs {
@@ -174,9 +204,13 @@ bool background_active(const aibs_background* background) {
 
 int background_margin(const aibs_background& background, int source_width, int source_height, double scale_x,
                       double scale_y) {
-    if (background.mode != AIBS_BG_BLUR) return 0;
+    int margin = 0;
+    if (std::isfinite(background.detail) && background.detail > 0) {
+        margin = 2 * detail_radius(std::max(source_width * scale_x, source_height * scale_y)) + 2;
+    }
+    if (background.mode != AIBS_BG_BLUR) return margin;
     const double sigma = blur_sigma(background, source_width, source_height, std::max(scale_x, scale_y));
-    return std::min(kMaxMargin, static_cast<int>(std::ceil(2.5 * sigma)));
+    return std::min(kMaxMargin, std::max(margin, static_cast<int>(std::ceil(2.5 * sigma))));
 }
 
 int32_t composite_background(cv::Mat& bgr, int first_col, double x, double y, double scale_x, double scale_y,
@@ -187,6 +221,8 @@ int32_t composite_background(cv::Mat& bgr, int first_col, double x, double y, do
     const double fx = static_cast<double>(matte.coverage.cols) / matte.source_width;
     const double fy = static_cast<double>(matte.coverage.rows) / matte.source_height;
     cv::Mat m = warp_plane(matte.coverage, fx, fy, x, y, scale_x, scale_y, bgr.cols, bgr.rows, cv::INTER_LINEAR);
+    refine_detail(m, bgr, background.detail,
+                  std::max(matte.source_width * scale_x, matte.source_height * scale_y));
     shift_edge(m, background.edge);
 
     // At soft edges, use the subject's own colour (not mixed with the old

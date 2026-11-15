@@ -19,7 +19,7 @@ use application_core::models::Registry;
 use application_core::portrait::{self, FaceStatus};
 use application_core::info::{self, FileInfo};
 use application_core::settings::{self, EditorMode, LanguagePreference, Settings, ThemePreference};
-use application_core::{AiSession, EngineError, Face, Matte, Portrait, Shape, Source};
+use application_core::{AiSession, EngineError, Face, Matte, Shape, Source};
 use tauri::ipc::Response;
 use tauri::path::BaseDirectory;
 use tauri::{Emitter, Manager, State};
@@ -184,6 +184,7 @@ impl RenderInputs {
         let prepared = clamped.prepare_layers();
         let images: Vec<Option<&Source>> = self.images.iter().map(|s| s.as_deref()).collect();
         let layers = prepared.layers(self.matte.as_deref(), &images);
+        let spots = clamped.engine_spots();
         self.source.render_adjusted(
             x,
             y,
@@ -191,10 +192,7 @@ impl RenderInputs {
             h,
             out_w,
             out_h,
-            Some(Portrait {
-                faces: &self.faces,
-                smoothing: clamped.skin_smoothing,
-            }),
+            Some(clamped.portrait(&self.faces, &spots)),
             Some(&colour),
             background,
             light,

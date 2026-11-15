@@ -87,6 +87,9 @@ export function ImageCanvas() {
   const commitLive = useApp((s) => s.commitLive);
   const tool = useApp((s) => s.tool);
   const brush = useApp((s) => s.brush);
+  const healing = useApp((s) => s.tool === "heal");
+  const healSize = useApp((s) => s.healSize);
+  const addSpot = useApp((s) => s.addSpot);
   const canPaint = useApp(
     (s) => (s.tool === "brush" || s.tool === "eraser") && s.live.layers.some((l) => l.id === s.selectedLayer),
   );
@@ -326,13 +329,20 @@ export function ImageCanvas() {
       if (point) beginStroke(point.x, point.y);
       return;
     }
+    if (healing && event.button === 0) {
+      const point = sourcePoint(event);
+      if (point) void addSpot(point.x, point.y);
+      return;
+    }
     dragRef.current = { x: event.clientX, y: event.clientY };
   };
 
   const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (canPaint) {
+    if (canPaint || healing) {
       const rect = containerRef.current?.getBoundingClientRect();
       if (rect) setCursor({ x: event.clientX - rect.left, y: event.clientY - rect.top });
+    }
+    if (canPaint) {
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         const point = sourcePoint(event);
         if (point) extendStroke(point.x, point.y);
@@ -392,17 +402,17 @@ export function ImageCanvas() {
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
         onPointerLeave={() => setCursor(null)}
-        className={canPaint ? "painting" : undefined}
+        className={canPaint || healing ? "painting" : undefined}
       />
-      {canPaint && cursor && camera && document && (
+      {(canPaint || healing) && cursor && camera && document && (
         <div
           className="brush-cursor"
           aria-hidden="true"
           style={{
             left: `${cursor.x}px`,
             top: `${cursor.y}px`,
-            width: `${(brush.size * Math.max(document.size.width, document.size.height) * camera.zoom) / (window.devicePixelRatio || 1)}px`,
-            height: `${(brush.size * Math.max(document.size.width, document.size.height) * camera.zoom) / (window.devicePixelRatio || 1)}px`,
+            width: `${((healing ? healSize : brush.size) * Math.max(document.size.width, document.size.height) * camera.zoom) / (window.devicePixelRatio || 1)}px`,
+            height: `${((healing ? healSize : brush.size) * Math.max(document.size.width, document.size.height) * camera.zoom) / (window.devicePixelRatio || 1)}px`,
           }}
         />
       )}
