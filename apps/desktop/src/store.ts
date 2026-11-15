@@ -138,6 +138,8 @@ export interface AppState {
   pendingLocate: PendingLocate | null;
   /** Background images a project refers to that could not be found. */
   missingBackgrounds: number;
+  /** AI results made by a different model version than the installed one. */
+  outdated: string[];
 
   init(): Promise<void>;
   /** Open an image. With `discard`, asks first when adjustments would be lost. */
@@ -300,6 +302,7 @@ export function createAppStore(api: Api) {
         shape: analyses.shapeReady ? { state: "ready", provider: "saved" } : { state: "none" },
         projectPath: status.projectPath,
         missingBackgrounds: status.missingBackgrounds,
+        outdated: status.outdated ?? [],
         exporting: null,
         // The core discards the recovery whenever a document opens.
         recovery: null,
@@ -612,6 +615,7 @@ export function createAppStore(api: Api) {
       recovery: null,
       pendingLocate: null,
       missingBackgrounds: 0,
+      outdated: [],
       faces: null,
       facesSerial: 0,
       enhancing: false,
@@ -703,6 +707,7 @@ export function createAppStore(api: Api) {
         if (shape?.state === "running" && shape.jobId === update.id) {
           const next = nextAnalysis(shape, update);
           set({ shape: next });
+          if (next.state === "ready") set({ outdated: get().outdated.filter((name) => name !== "shape") });
           if (next.state === "ready") void refreshOverview(get().live).catch(() => undefined);
           return;
         }
@@ -714,7 +719,10 @@ export function createAppStore(api: Api) {
             break;
           case "finished": {
             const result = update.result as { provider?: string } | null;
-            set({ background: { state: "ready", provider: result?.provider ?? "cpu" } });
+            set({
+              background: { state: "ready", provider: result?.provider ?? "cpu" },
+              outdated: get().outdated.filter((name) => name !== "matte"),
+            });
             void refreshOverview(get().live).catch(() => undefined);
             break;
           }

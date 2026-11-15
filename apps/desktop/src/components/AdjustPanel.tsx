@@ -156,8 +156,23 @@ function SeparationStatus() {
         </div>
       );
     case "ready":
-      return null;
+      return <OutdatedNote result="matte" onRedo={start} />;
   }
+}
+
+/** A saved AI result made by another model version can be redone. */
+function OutdatedNote({ result, onRedo }: { result: string; onRedo: () => Promise<void> }) {
+  const { t } = useI18n();
+  const outdated = useApp((s) => s.outdated.includes(result));
+  if (!outdated) return null;
+  return (
+    <div className="separation">
+      <p className="note warning">{t("models.outdated")}</p>
+      <button type="button" className="ghost small" onClick={() => void onRedo()}>
+        {t("models.redo")}
+      </button>
+    </div>
+  );
 }
 
 /** 3D shape estimation status for lighting. */
@@ -197,7 +212,12 @@ function ShapeStatus() {
         </div>
       );
     case "ready":
-      return <p className="note">{t("light.ready")}</p>;
+      return (
+        <>
+          <p className="note">{t("light.ready")}</p>
+          <OutdatedNote result="shape" onRedo={start} />
+        </>
+      );
   }
 }
 

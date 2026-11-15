@@ -9,7 +9,7 @@ use std::fmt;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -39,6 +39,47 @@ struct LicenseRecord {
     model: String,
     license: String,
     approved: bool,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    commercial_use: Option<bool>,
+    #[serde(default)]
+    checked_on: Option<String>,
+}
+
+/// Which model (and version) produced a result, as recorded in projects.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRef {
+    pub id: String,
+    pub version: String,
+}
+
+/// A model's license record, as shown to the user.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LicenseSummary {
+    pub license: String,
+    pub approved: bool,
+    pub source: Option<String>,
+    pub commercial_use: Option<bool>,
+    pub checked_on: Option<String>,
+}
+
+/// What the app knows about one registered model without reading all of
+/// its file (see [`Registry::verify`] for the full check).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelInfo {
+    pub id: String,
+    pub version: String,
+    pub purpose: String,
+    /// Size of the file on disk, when it is there.
+    pub size: Option<u64>,
+    pub sha256: String,
+    pub license: Option<LicenseSummary>,
+    /// Why the model cannot be used (an error code), if it cannot.
+    pub problem: Option<String>,
 }
 
 /// Why a model may not be used. `code()` is the stable identifier the UI
@@ -121,6 +162,74 @@ impl Registry {
         &self.models
     }
 
+    pub fn entry(&self, id: &str) -> Option<&ModelEntry> {
+        self.models.iter().find(|m| m.id == id)
+    }
+
+    /// The model's id and version, for recording what produced a result.
+    pub fn model_ref(&self, id: &str) -> Option<ModelRef> {
+        self.entry(id).map(|m| ModelRef { id: m.id.clone(), version: m.version.clone() })
+    }
+
+    fn license_record(&self, entry: &ModelEntry) -> Option<LicenseRecord> {
+        let path = inside(&self.root, &entry.license)?;
+        let text = fs::read_to_string(path).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    fn check_license(&self, entry: &ModelEntry) -> Result<LicenseRecord, ModelError> {
+        let record = self.license_record(entry).ok_or_else(|| ModelError::LicenseMissing(entry.id.clone()))?;
+        if record.model != entry.id || !record.approved || record.license.trim().is_empty() {
+            return Err(ModelError::LicenseNotApproved(entry.id.clone()));
+        }
+        Ok(record)
+    }
+
+    /// Every registered model with its license and whether its file is
+    /// there. Quick: file sizes only, no hashing.
+    pub fn inspect(&self) -> Vec<ModelInfo> {
+        self.models
+            .iter()
+            .map(|entry| {
+                let license = self.license_record(entry).map(|r| LicenseSummary {
+                    license: r.license.clone(),
+                    approved: r.approved && r.model == entry.id,
+                    source: r.source.clone(),
+                    commercial_use: r.commercial_use,
+                    checked_on: r.checked_on.clone(),
+                });
+                let size = inside(&self.root, &entry.file).and_then(|p| fs::metadata(p).ok()).map(|m| m.len());
+                let problem = match (self.check_license(entry), size) {
+                    (Err(e), _) => Some(e.code().to_string()),
+                    (Ok(_), None) => Some(ModelError::FileMissing(entry.id.clone()).code().to_string()),
+                    (Ok(_), Some(_)) => None,
+                };
+                ModelInfo {
+                    id: entry.id.clone(),
+                    version: entry.version.clone(),
+                    purpose: entry.purpose.clone(),
+                    size,
+                    sha256: entry.sha256.clone(),
+                    license,
+                    problem,
+                }
+            })
+            .collect()
+    }
+
+    /// Full check of one model: license record and the file's SHA-256
+    /// (read in pieces, so large models do not need to fit in memory).
+    pub fn verify(&self, id: &str) -> Result<(), ModelError> {
+        let entry = self.entry(id).ok_or_else(|| ModelError::UnknownModel(id.to_string()))?;
+        self.check_license(entry)?;
+        let path = inside(&self.root, &entry.file).ok_or_else(|| ModelError::FileMissing(id.into()))?;
+        let hash = crate::files::sha256_file(&path).map_err(|_| ModelError::FileMissing(id.into()))?;
+        if hash != entry.sha256.to_ascii_lowercase() {
+            return Err(ModelError::HashMismatch(id.into()));
+        }
+        Ok(())
+    }
+
     /// The model's bytes, after checking its license record and hash.
     pub fn load_model(&self, id: &str) -> Result<(ModelEntry, Vec<u8>), ModelError> {
         let entry = self
@@ -130,14 +239,7 @@ impl Registry {
             .ok_or_else(|| ModelError::UnknownModel(id.to_string()))?
             .clone();
 
-        let license_path = inside(&self.root, &entry.license).ok_or_else(|| ModelError::LicenseMissing(id.into()))?;
-        let record: LicenseRecord = fs::read_to_string(license_path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .ok_or_else(|| ModelError::LicenseMissing(id.into()))?;
-        if record.model != entry.id || !record.approved || record.license.trim().is_empty() {
-            return Err(ModelError::LicenseNotApproved(id.into()));
-        }
+        self.check_license(&entry)?;
 
         let file_path = inside(&self.root, &entry.file).ok_or_else(|| ModelError::FileMissing(id.into()))?;
         let bytes = fs::read(file_path).map_err(|_| ModelError::FileMissing(id.into()))?;
@@ -251,5 +353,37 @@ pub(crate) mod tests {
             sha256_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn inspection_lists_licenses_and_problems_and_verify_checks_hashes() {
+        let registry = Registry::load(&repo_models()).unwrap();
+        let infos = registry.inspect();
+        assert_eq!(infos.len(), registry.models().len());
+        for info in &infos {
+            assert_eq!(info.problem, None, "{} should be usable", info.id);
+            assert!(info.size.unwrap() > 0);
+            let license = info.license.as_ref().unwrap();
+            assert!(license.approved && !license.license.is_empty());
+            registry.verify(&info.id).unwrap();
+        }
+        assert_eq!(
+            registry.model_ref("face-yunet"),
+            Some(ModelRef { id: "face-yunet".into(), version: "2023mar".into() })
+        );
+
+        let copy = Copy::new("inspect");
+        let path = copy.0.join("files/test-luma-v1.onnx");
+        let mut bytes = fs::read(&path).unwrap();
+        bytes[0] ^= 1;
+        fs::write(&path, &bytes).unwrap();
+        let damaged = Registry::load(&copy.0).unwrap();
+        // A quick look cannot see a changed byte; the full check can.
+        assert_eq!(damaged.inspect().iter().find(|m| m.id == "test-luma").unwrap().problem, None);
+        assert_eq!(damaged.verify("test-luma").unwrap_err().code(), "model_damaged");
+        fs::remove_file(&path).unwrap();
+        let info = Registry::load(&copy.0).unwrap().inspect().into_iter().find(|m| m.id == "test-luma").unwrap();
+        assert_eq!(info.problem.as_deref(), Some("model_missing"));
+        assert_eq!(info.size, None);
     }
 }

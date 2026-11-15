@@ -12,7 +12,7 @@ use engine_sys::{AiSession, EngineError, Matte, Provider, Shape, Source};
 use serde::Serialize;
 
 use crate::jobs::{JobContext, JobError};
-use crate::models::Registry;
+use crate::models::{ModelRef, Registry};
 
 /// The subject/background separation model (BiRefNet lite).
 pub const BACKGROUND_MODEL: &str = "background-birefnet-lite";
@@ -22,7 +22,7 @@ pub const DEPTH_MODEL: &str = "depth-anything-v2-small";
 /// One loaded model, shared between jobs.
 pub struct ModelSlot {
     id: &'static str,
-    session: Mutex<Option<Arc<AiSession>>>,
+    session: Mutex<Option<(Arc<AiSession>, ModelRef)>>,
 }
 
 impl ModelSlot {
@@ -30,22 +30,37 @@ impl ModelSlot {
         ModelSlot { id, session: Mutex::new(None) }
     }
 
-    fn get(&self, registry: &Registry, provider: Provider) -> Result<Arc<AiSession>, JobError> {
+    pub fn id(&self) -> &'static str {
+        self.id
+    }
+
+    fn get(&self, registry: &Registry, provider: Provider) -> Result<(Arc<AiSession>, ModelRef), JobError> {
         let mut slot = self.session.lock().map_err(|_| JobError::new("internal", "model lock"))?;
-        if let Some(session) = slot.as_ref() {
+        if let Some((session, model)) = slot.as_ref() {
             if provider == Provider::DirectMl || session.provider() == Provider::Cpu {
-                return Ok(session.clone());
+                return Ok((session.clone(), model.clone()));
             }
         }
-        let (_, bytes) = registry.load_model(self.id).map_err(|e| JobError::new(e.code(), e.to_string()))?;
+        let (entry, bytes) = registry.load_model(self.id).map_err(|e| JobError::new(e.code(), e.to_string()))?;
         let session = AiSession::open(&bytes, provider).map_err(|(_, note)| JobError::new("model_load_failed", note))?;
-        let session = Arc::new(session);
-        *slot = Some(session.clone());
-        Ok(session)
+        let loaded = (Arc::new(session), ModelRef { id: entry.id, version: entry.version });
+        *slot = Some(loaded.clone());
+        Ok(loaded)
     }
 
     pub fn is_loaded(&self) -> bool {
-        self.session.lock().map(|s| s.is_some()).unwrap_or(false)
+        self.loaded_provider().is_some()
+    }
+
+    /// The provider the loaded model runs on, if it is loaded.
+    pub fn loaded_provider(&self) -> Option<Provider> {
+        self.session.lock().ok()?.as_ref().map(|(s, _)| s.provider())
+    }
+
+    /// Release the model (it is loaded again when next needed). Returns
+    /// whether one was loaded.
+    pub fn unload(&self) -> bool {
+        self.session.lock().map(|mut s| s.take().is_some()).unwrap_or(false)
     }
 }
 
@@ -58,6 +73,8 @@ pub struct AnalysisReport {
     /// Why the GPU was not used, when it was wanted.
     pub fallback_reason: Option<String>,
     pub ms: f64,
+    /// The model that produced the result.
+    pub model: ModelRef,
 }
 
 /// Run `analyse` with the slot's model, GPU first, CPU if the GPU fails.
@@ -68,7 +85,7 @@ fn run<T>(
     analyse: impl Fn(&AiSession) -> Result<T, EngineError>,
 ) -> Result<(T, AnalysisReport), JobError> {
     ctx.progress(0.05, "load");
-    let session = slot.get(registry, Provider::DirectMl)?;
+    let (session, model) = slot.get(registry, Provider::DirectMl)?;
     ctx.check()?;
     ctx.progress(0.3, "run");
     let started = Instant::now();
@@ -79,7 +96,7 @@ fn run<T>(
             // The GPU could not run it; the CPU can.
             ctx.check()?;
             fallback_reason = Some(format!("DirectML failed while running: {error}"));
-            let cpu = slot.get(registry, Provider::Cpu)?;
+            let (cpu, _) = slot.get(registry, Provider::Cpu)?;
             let value = analyse(&cpu).map_err(|e| JobError::new("inference_failed", e.to_string()))?;
             (value, Provider::Cpu)
         }
@@ -97,6 +114,7 @@ fn run<T>(
             .to_string(),
             fallback_reason,
             ms: started.elapsed().as_secs_f64() * 1000.0,
+            model,
         },
     ))
 }
@@ -155,8 +173,11 @@ mod tests {
                 }
             };
             assert!(["directml", "cpu"].contains(&result["provider"].as_str().unwrap()));
+            assert_eq!(result["model"]["id"], BACKGROUND_MODEL);
         }
         assert!(slot.is_loaded());
+        assert!(slot.unload());
+        assert!(!slot.is_loaded() && !slot.unload());
 
         // The depth model the same way.
         let (source2, slot2) = (source.clone(), depth_slot.clone());

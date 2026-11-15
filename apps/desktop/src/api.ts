@@ -10,6 +10,7 @@ import type {
   ExportOptions,
   FacesReport,
   FileInfo,
+  ModelOverview,
   LanguagePreference,
   RecoveryInfo,
   Settings,
@@ -41,6 +42,11 @@ export interface Api {
   /** Save as a project, to `path` or to the open project; resolves to the path saved to. */
   saveProject(path: string | null): Promise<string>;
   autosave(): Promise<void>;
+  modelOverview(): Promise<ModelOverview[]>;
+  /** Check every model file's hash; resolves to the job id. */
+  verifyModels(): Promise<number>;
+  /** Release loaded models; resolves to how many were loaded. */
+  unloadModels(): Promise<number>;
   /** Set the window title. */
   setTitle(title: string): Promise<void>;
   recoveryStatus(): Promise<RecoveryInfo | null>;
@@ -147,6 +153,9 @@ export const tauriApi: Api = {
   backgroundStatus: () => invoke("background_status"),
   saveProject: (path) => invoke("save_project", { path }),
   autosave: () => invoke("autosave"),
+  modelOverview: () => invoke("model_overview"),
+  verifyModels: () => invoke("verify_models"),
+  unloadModels: () => invoke("unload_models"),
   setTitle: (title) => getCurrentWindow().setTitle(title),
   recoveryStatus: () => invoke("recovery_status"),
   restoreRecovery: (original) => invoke("restore_recovery", { original: original ?? null }),

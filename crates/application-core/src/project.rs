@@ -26,13 +26,18 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::document::{Adjustments, History};
 use crate::files::{self, FileRef, Located};
+use crate::models::ModelRef;
 
 /// File name extension of projects.
 pub const EXTENSION: &str = "aibs";
 /// Identifies the file as an AI Beauty Studio project.
 pub const FORMAT_NAME: &str = "ai-beauty-studio-project";
 /// The version this build writes. Readers accept this and older versions.
-pub const FORMAT_VERSION: u32 = 1;
+///
+/// - 1: first release (1.0).
+/// - 2: records which model (id and version) produced each AI result;
+///   `backgroundImages` renamed `images` (they also serve image layers).
+pub const FORMAT_VERSION: u32 = 2;
 
 const PROJECT_ENTRY: &str = "project.json";
 const MATTE_ENTRY: &str = "masks/subject.png";
@@ -148,6 +153,9 @@ pub struct PlaneEntry {
     pub height: u32,
     pub source_width: u32,
     pub source_height: u32,
+    /// The model that produced it (unknown for projects from format 1).
+    #[serde(default)]
+    pub model: Option<ModelRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -173,16 +181,27 @@ pub struct ProjectFile {
     /// None when detection had not finished.
     #[serde(default)]
     pub faces: Option<Vec<FaceRecord>>,
+    /// The model that found the faces.
+    #[serde(default)]
+    pub faces_model: Option<ModelRef>,
     #[serde(default)]
     pub matte: Option<PlaneEntry>,
     #[serde(default)]
     pub shape: Option<PlaneEntry>,
-    /// Replacement background images; number n in the adjustments is
-    /// element n - 1.
+    /// Images the edits use (replacement backgrounds, image layers);
+    /// number n in the adjustments is element n - 1.
     #[serde(default)]
-    pub background_images: Vec<FileRef>,
+    pub images: Vec<FileRef>,
     #[serde(default)]
     pub preview: Option<String>,
+}
+
+/// Which model produced each AI result.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AnalysisModels<'a> {
+    pub faces: Option<&'a ModelRef>,
+    pub matte: Option<&'a ModelRef>,
+    pub shape: Option<&'a ModelRef>,
 }
 
 /// What to save: the open document's state.
@@ -193,7 +212,9 @@ pub struct Snapshot<'a> {
     pub faces: Option<&'a [Face]>,
     pub matte: Option<&'a Matte>,
     pub shape: Option<&'a Shape>,
-    pub background_images: &'a [FileRef],
+    /// The models that produced the faces, matte and shape.
+    pub models: AnalysisModels<'a>,
+    pub images: &'a [FileRef],
     /// A small rendering of the edited image (RGBA).
     pub preview: Option<&'a RgbaImage>,
     pub saved_at: u64,
@@ -220,7 +241,7 @@ pub fn save(path: &Path, snapshot: &Snapshot) -> Result<(), ProjectError> {
             let png = engine_sys::encode(&plane.values, plane.width, plane.height, 1, ImageFormat::Png)
                 .map_err(engine_error("subject mask"))?;
             entries.push((MATTE_ENTRY, png));
-            Some(plane_entry(MATTE_ENTRY, &plane))
+            Some(plane_entry(MATTE_ENTRY, &plane, snapshot.models.matte))
         }
         None => None,
     };
@@ -232,7 +253,7 @@ pub fn save(path: &Path, snapshot: &Snapshot) -> Result<(), ProjectError> {
             let png = engine_sys::encode(&bytes, plane.width, plane.height, 3, ImageFormat::Png)
                 .map_err(engine_error("3D shape"))?;
             entries.push((SHAPE_ENTRY, png));
-            Some(plane_entry(SHAPE_ENTRY, &plane))
+            Some(plane_entry(SHAPE_ENTRY, &plane, snapshot.models.shape))
         }
         None => None,
     };
@@ -262,9 +283,10 @@ pub fn save(path: &Path, snapshot: &Snapshot) -> Result<(), ProjectError> {
         image_height: snapshot.image_size.1,
         history: SavedHistory { states: states.to_vec(), index },
         faces: snapshot.faces.map(|faces| faces.iter().map(FaceRecord::from).collect()),
+        faces_model: snapshot.faces.and(snapshot.models.faces).cloned(),
         matte,
         shape,
-        background_images: snapshot.background_images.iter().map(relative).collect(),
+        images: snapshot.images.iter().map(relative).collect(),
         preview,
     };
     let json = serde_json::to_vec_pretty(&file).map_err(io::Error::other)?;
@@ -284,13 +306,14 @@ pub fn save(path: &Path, snapshot: &Snapshot) -> Result<(), ProjectError> {
     Ok(())
 }
 
-fn plane_entry<T>(entry: &str, plane: &Plane<T>) -> PlaneEntry {
+fn plane_entry<T>(entry: &str, plane: &Plane<T>, model: Option<&ModelRef>) -> PlaneEntry {
     PlaneEntry {
         entry: entry.to_string(),
         width: plane.width,
         height: plane.height,
         source_width: plane.source_width,
         source_height: plane.source_height,
+        model: model.cloned(),
     }
 }
 
@@ -325,8 +348,16 @@ pub fn migrate(value: serde_json::Value) -> Result<ProjectFile, ProjectError> {
     if version > FORMAT_VERSION {
         return Err(ProjectError::NewerVersion(version));
     }
-    // Version 1 is the current form. Later versions add a step here that
-    // rewrites the previous version's JSON into the next one.
+    // Each step rewrites one version's JSON into the next.
+    let mut value = value;
+    if version < 2 {
+        // 1 -> 2: "backgroundImages" became "images"; model records are
+        // new and stay unknown for results saved by version 1.
+        if let Some(object) = value.as_object_mut() {
+            let images = object.remove("backgroundImages").unwrap_or_else(|| serde_json::json!([]));
+            object.insert("images".into(), images);
+        }
+    }
     let mut file: ProjectFile =
         serde_json::from_value(value).map_err(|e| ProjectError::Damaged(format!("project.json: {e}")))?;
     file.version = FORMAT_VERSION;
@@ -365,7 +396,7 @@ pub struct Loaded {
     pub faces: Option<Vec<Face>>,
     pub matte: Option<Matte>,
     pub shape: Option<Shape>,
-    pub background_images: Vec<BackgroundRef>,
+    pub images: Vec<BackgroundRef>,
 }
 
 /// Read the project at `path`. The original photo is looked for where the
@@ -428,8 +459,8 @@ pub fn load(path: &Path, original_override: Option<&Path>) -> Result<Loaded, Pro
         }
         None => None,
     };
-    let background_images = file
-        .background_images
+    let images = file
+        .images
         .iter()
         .map(|reference| BackgroundRef {
             file: reference.clone(),
@@ -445,7 +476,7 @@ pub fn load(path: &Path, original_override: Option<&Path>) -> Result<Loaded, Pro
         original_path,
         matte,
         shape,
-        background_images,
+        images,
         file,
     })
 }
@@ -496,7 +527,8 @@ mod tests {
             faces: None,
             matte: None,
             shape: None,
-            background_images: &[],
+            models: AnalysisModels::default(),
+            images: &[],
             preview,
             saved_at: 1_700_000_000,
         }
@@ -515,11 +547,14 @@ mod tests {
         let backgrounds = [FileRef::of(&backdrop).unwrap()];
         let preview = engine_sys::Source::open(PNG).unwrap().render_fit(32).unwrap();
         let path = f.dir.join("projects").join("我的專案.aibs");
+        let yunet = ModelRef { id: "face-yunet".into(), version: "2023mar".into() };
+        let birefnet = ModelRef { id: "background-birefnet-lite".into(), version: "v1".into() };
         let snap = Snapshot {
             faces: Some(std::slice::from_ref(&face)),
             matte: Some(&matte),
             shape: Some(&shape),
-            background_images: &backgrounds,
+            models: AnalysisModels { faces: Some(&yunet), matte: Some(&birefnet), shape: None },
+            images: &backgrounds,
             ..snapshot(&f, &history, Some(&preview))
         };
         save(&path, &snap).unwrap();
@@ -536,7 +571,11 @@ mod tests {
         assert_eq!((restored.width, restored.source_width), (normals.width, normals.source_width));
         let worst = normals.values.iter().zip(&restored.values).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
         assert!(worst < 0.02, "normals within 8-bit precision, worst {worst}");
-        assert_eq!(loaded.background_images[0].found.as_deref(), Some(backdrop.as_path()));
+        assert_eq!(loaded.images[0].found.as_deref(), Some(backdrop.as_path()));
+        assert_eq!(loaded.file.faces_model.as_ref(), Some(&yunet));
+        assert_eq!(loaded.file.matte.as_ref().unwrap().model.as_ref(), Some(&birefnet));
+        assert_eq!(loaded.file.shape.as_ref().unwrap().model, None);
+        assert_eq!(loaded.file.version, FORMAT_VERSION);
         assert_eq!(loaded.file.original.relative_path.as_deref().map(Path::new), Some(Path::new("../photos/相片 1.png")));
         assert_eq!(&read_preview(&path).unwrap()[..2], &[0xFF, 0xD8]);
         assert_eq!(inspect(&path).unwrap().saved_at, 1_700_000_000);
@@ -586,9 +625,10 @@ mod tests {
             image_height: 48,
             history: SavedHistory { states: vec![Adjustments::default()], index: 0 },
             faces: None,
+            faces_model: None,
             matte: None,
             shape: None,
-            background_images: vec![],
+            images: vec![],
             preview: None,
         })
         .unwrap();
@@ -619,10 +659,47 @@ mod tests {
         fs::write(&backdrop, PNG).unwrap();
         let backgrounds = [FileRef::of(&backdrop).unwrap()];
         let path = f.dir.join("p.aibs");
-        save(&path, &Snapshot { background_images: &backgrounds, ..snapshot(&f, &history, None) }).unwrap();
+        save(&path, &Snapshot { images: &backgrounds, ..snapshot(&f, &history, None) }).unwrap();
         fs::remove_file(&backdrop).unwrap();
         let loaded = load(&path, None).unwrap();
-        assert_eq!(loaded.background_images.len(), 1);
-        assert!(loaded.background_images[0].found.is_none());
+        assert_eq!(loaded.images.len(), 1);
+        assert!(loaded.images[0].found.is_none());
+    }
+
+    /// A project written by version 1.0 (format 1) opens in this version.
+    #[test]
+    fn format_1_projects_are_migrated() {
+        let f = fixture("project-v1");
+        let backdrop = f.dir.join("back.png");
+        fs::write(&backdrop, PNG).unwrap();
+        let v1 = serde_json::json!({
+            "format": FORMAT_NAME,
+            "version": 1,
+            "appVersion": "1.0.0",
+            "savedAt": 5,
+            "original": f.reference,
+            "imageWidth": 64,
+            "imageHeight": 48,
+            "history": { "states": [{ "exposure": 0.5 }], "index": 0 },
+            "faces": [],
+            "matte": null,
+            "shape": null,
+            "backgroundImages": [FileRef::of(&backdrop).unwrap()],
+            "preview": null
+        });
+        let path = f.dir.join("old.aibs");
+        let mut zip = ZipWriter::new(File::create(&path).unwrap());
+        zip.start_file(PROJECT_ENTRY, SimpleFileOptions::default().compression_method(CompressionMethod::Stored))
+            .unwrap();
+        zip.write_all(&serde_json::to_vec(&v1).unwrap()).unwrap();
+        zip.finish().unwrap();
+
+        let loaded = load(&path, None).unwrap();
+        assert_eq!(loaded.file.version, FORMAT_VERSION);
+        assert_eq!(loaded.images.len(), 1);
+        assert_eq!(loaded.images[0].found.as_deref(), Some(backdrop.as_path()));
+        assert_eq!(loaded.faces, Some(vec![]));
+        assert_eq!(loaded.file.faces_model, None);
+        assert_eq!(loaded.history.current().exposure, 0.5);
     }
 }

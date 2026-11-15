@@ -734,6 +734,58 @@ input:focus-visible {
   color: #ffffff;
 }
 
+/* AI models */
+.model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.model-card {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.model-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.model-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 12px;
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+}
+
+.model-facts dt {
+  color: var(--muted);
+}
+
+.model-facts dd {
+  margin: 0;
+}
+
+.badge.ok {
+  background: #2e7d4f;
+}
+
+.badge.bad {
+  background: #b3261e;
+}
+
+.dialog-actions.start {
+  justify-content: flex-start;
+  margin-top: 10px;
+}
+
 /* Lighting */
 .light-handle {
   position: absolute;

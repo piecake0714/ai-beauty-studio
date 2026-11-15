@@ -4,6 +4,7 @@ import { useApp, useI18n } from "../context";
 import { errorMessage } from "../i18n";
 import type { LanguagePreference, ThemePreference } from "../types";
 import { AiSection } from "./AiSection";
+import { ModelsSection } from "./ModelsSection";
 
 type Notices = { kind: "loading" } | { kind: "ready"; text: string } | { kind: "failed"; code: string };
 
@@ -131,6 +132,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               ]}
             />
             <AiSection />
+            <ModelsSection />
             <section className="about">
               <h2>{t("settings.about")}</h2>
               <p>

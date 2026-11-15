@@ -99,7 +99,8 @@ mod tests {
             faces: None,
             matte: None,
             shape: None,
-            background_images: &[],
+            models: Default::default(),
+            images: &[],
             preview: None,
             saved_at: 42,
         };

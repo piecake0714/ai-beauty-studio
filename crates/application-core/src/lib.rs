@@ -24,7 +24,7 @@ use std::path::Path;
 
 pub use engine_sys::{
     encode, AiSession, Background, BackgroundMode, EngineError, Face, ImageFormat as EncodeFormat, Light, LightKind, Matte,
-    Plane, Portrait, RgbaImage, Shape, Source,
+    Plane, Portrait, Provider, RgbaImage, Shape, Source,
 };
 
 /// Why an image could not be opened. `code()` is the stable identifier the

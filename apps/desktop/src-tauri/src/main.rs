@@ -11,7 +11,8 @@ use application_core::background::{self as separation, ModelSlot};
 use application_core::document::{Adjustments, EditState, History};
 use application_core::export::{self, ExportOptions};
 use application_core::files::FileRef;
-use application_core::project::{self, ProjectError};
+use application_core::models::{ModelInfo, ModelRef};
+use application_core::project::{self, AnalysisModels, ProjectError};
 use application_core::recovery::{Recovery, RecoveryInfo};
 use application_core::jobs::{JobError, Jobs};
 use application_core::models::Registry;
@@ -54,15 +55,19 @@ struct OpenDocument {
     matte: Option<Arc<Matte>>,
     /// 3D shape for lighting, once it has been estimated.
     shape: Option<Arc<Shape>>,
-    /// Replacement background images added to this document; number n in
-    /// the adjustments is element n - 1.
-    background_images: Vec<BackgroundImage>,
+    /// Images added to this document (replacement backgrounds, image
+    /// layers); number n in the adjustments is element n - 1.
+    images: Vec<DocImage>,
+    /// Which models produced the faces, matte and shape.
+    faces_model: Option<ModelRef>,
+    matte_model: Option<ModelRef>,
+    shape_model: Option<ModelRef>,
 }
 
-/// A replacement background image; `source` is None when a project refers
-/// to an image that is missing.
+/// An image used by the edits; `source` is None when a project refers to an
+/// image that is missing.
 #[derive(Clone)]
-struct BackgroundImage {
+struct DocImage {
     file: FileRef,
     source: Option<Arc<Source>>,
 }
@@ -84,7 +89,7 @@ impl OpenDocument {
             faces: self.faces.clone(),
             matte: self.matte.clone(),
             shape: self.shape.clone(),
-            images: self.background_images.iter().map(|b| b.source.clone()).collect(),
+            images: self.images.iter().map(|b| b.source.clone()).collect(),
         }
     }
 
@@ -96,8 +101,9 @@ impl OpenDocument {
             history: self.history.clone(),
             serial: self.serial,
             faces_known: matches!(self.faces_status, FaceStatus::Ready { .. }),
-            backgrounds: self.background_images.iter().map(|b| b.file.clone()).collect(),
+            backgrounds: self.images.iter().map(|b| b.file.clone()).collect(),
             project_path: self.project_path.clone(),
+            models: [self.faces_model.clone(), self.matte_model.clone(), self.shape_model.clone()],
         }
     }
 }
@@ -111,6 +117,8 @@ struct SaveParts {
     faces_known: bool,
     backgrounds: Vec<FileRef>,
     project_path: Option<PathBuf>,
+    /// Models of the faces, matte and shape.
+    models: [Option<ModelRef>; 3],
 }
 
 /// Longer side of the preview stored in projects.
@@ -138,7 +146,12 @@ impl SaveParts {
             faces: self.faces_known.then_some(self.inputs.faces.as_slice()),
             matte: self.inputs.matte.as_deref(),
             shape: self.inputs.shape.as_deref(),
-            background_images: &self.backgrounds,
+            models: AnalysisModels {
+                faces: self.models[0].as_ref(),
+                matte: self.models[1].as_ref(),
+                shape: self.models[2].as_ref(),
+            },
+            images: &self.backgrounds,
             preview,
             saved_at: now_seconds(),
         }
@@ -210,7 +223,7 @@ struct AppState {
     /// Serial of the last opened image.
     document_serial: AtomicU64,
     /// The face detector, loaded on first use and kept.
-    detector: Mutex<Option<Arc<AiSession>>>,
+    detector: Mutex<Option<(Arc<AiSession>, ModelRef)>>,
     /// The background separation model, loaded on first use and kept.
     background_model: Arc<ModelSlot>,
     /// The depth model for 3D lighting, loaded on first use and kept.
@@ -222,13 +235,14 @@ struct AppState {
 }
 
 impl AppState {
-    fn face_detector(&self) -> Result<Arc<AiSession>, String> {
+    fn face_detector(&self) -> Result<(Arc<AiSession>, ModelRef), String> {
         let mut slot = self.detector.lock().map_err(|_| "internal".to_string())?;
         if let Some(detector) = slot.as_ref() {
             return Ok(detector.clone());
         }
         let registry = Registry::load(&self.models_dir).map_err(|e| e.code().to_string())?;
-        let detector = Arc::new(portrait::open_detector(&registry)?);
+        let (session, model) = portrait::open_detector(&registry)?;
+        let detector = (Arc::new(session), model);
         *slot = Some(detector.clone());
         Ok(detector)
     }
@@ -311,7 +325,9 @@ struct Opening {
     faces: Option<Vec<Face>>,
     matte: Option<Matte>,
     shape: Option<Shape>,
-    background_images: Vec<BackgroundImage>,
+    images: Vec<DocImage>,
+    /// Models of the faces, matte and shape (from a project).
+    models: [Option<ModelRef>; 3],
 }
 
 /// Make `opening` the open document and start face detection if needed.
@@ -336,7 +352,10 @@ fn install(app: &tauri::AppHandle, state: &AppState, opening: Opening) -> Result
         faces_status,
         matte: opening.matte.map(Arc::new),
         shape: opening.shape.map(Arc::new),
-        background_images: opening.background_images,
+        images: opening.images,
+        faces_model: opening.models[0].clone(),
+        matte_model: opening.models[1].clone(),
+        shape_model: opening.models[2].clone(),
     });
     // The previous document's recovery no longer applies.
     state.recovery.discard();
@@ -347,14 +366,19 @@ fn install(app: &tauri::AppHandle, state: &AppState, opening: Opening) -> Result
             let state = app.state::<AppState>();
             let result = state
                 .face_detector()
-                .and_then(|detector| portrait::detect(&source, &detector));
+                .and_then(|(detector, model)| portrait::detect(&source, &detector).map(|faces| (faces, model)));
             let status = match &result {
-                Ok(faces) => FaceStatus::Ready { count: faces.len() },
+                Ok((faces, _)) => FaceStatus::Ready { count: faces.len() },
                 Err(code) => FaceStatus::Unavailable { code: code.clone() },
             };
             if let Ok(mut document) = state.document.lock() {
                 if let Some(document) = document.as_mut().filter(|d| d.serial == serial) {
-                    document.faces = Arc::new(result.unwrap_or_default());
+                    let (faces, model) = match result {
+                        Ok((faces, model)) => (faces, Some(model)),
+                        Err(_) => (Vec::new(), None),
+                    };
+                    document.faces = Arc::new(faces);
+                    document.faces_model = model;
                     document.faces_status = status.clone();
                     let _ = app.emit("faces", FacesEvent { serial, status });
                 }
@@ -387,7 +411,8 @@ async fn open_image(path: String, app: tauri::AppHandle, state: State<'_, AppSta
             faces: None,
             matte: None,
             shape: None,
-            background_images: Vec::new(),
+            images: Vec::new(),
+            models: Default::default(),
         },
     )?;
     // The image opened; failing to save the recent list must not block it.
@@ -401,10 +426,15 @@ fn load_project(path: &Path, original: Option<&Path>) -> Result<(Opening, applic
     let loaded = project::load(path, original).map_err(|e| e.code().to_string())?;
     let source = application_core::open_document(&loaded.original_path).map_err(|e| e.code().to_string())?;
     let overview = source.render_fit(OVERVIEW_MAX_DIMENSION).map_err(engine_error_code)?;
-    let background_images = loaded
-        .background_images
+    let models = [
+        loaded.file.faces_model.clone(),
+        loaded.file.matte.as_ref().and_then(|m| m.model.clone()),
+        loaded.file.shape.as_ref().and_then(|m| m.model.clone()),
+    ];
+    let images = loaded
+        .images
         .iter()
-        .map(|b| BackgroundImage {
+        .map(|b| DocImage {
             file: FileRef {
                 path: b.found.as_ref().map_or_else(|| b.file.path.clone(), |p| p.to_string_lossy().into_owned()),
                 ..b.file.clone()
@@ -430,7 +460,8 @@ fn load_project(path: &Path, original: Option<&Path>) -> Result<(Opening, applic
             faces: loaded.faces,
             matte: loaded.matte,
             shape: loaded.shape,
-            background_images,
+            images,
+            models,
         },
         overview,
     ))
@@ -480,6 +511,9 @@ struct DocumentStatus {
     project_path: Option<String>,
     /// Background images a project refers to that could not be found.
     missing_backgrounds: usize,
+    /// AI results ("faces", "matte", "shape") made by a different model
+    /// version than the one installed now.
+    outdated: Vec<String>,
 }
 
 #[tauri::command]
@@ -490,8 +524,29 @@ fn document_status(state: State<'_, AppState>) -> Result<DocumentStatus, String>
         serial: document.serial,
         original_path: document.original.path.clone(),
         project_path: document.project_path.as_ref().map(|p| p.to_string_lossy().into_owned()),
-        missing_backgrounds: document.background_images.iter().filter(|b| b.source.is_none()).count(),
+        missing_backgrounds: document.images.iter().filter(|b| b.source.is_none()).count(),
+        outdated: outdated_results(&state.models_dir, document),
     })
+}
+
+/// Which AI results of `document` came from another version of their model
+/// than the installed one (unknown origins are not reported).
+fn outdated_results(models_dir: &Path, document: &OpenDocument) -> Vec<String> {
+    let Ok(registry) = Registry::load(models_dir) else {
+        return Vec::new();
+    };
+    [
+        ("faces", &document.faces_model),
+        ("matte", &document.matte_model),
+        ("shape", &document.shape_model),
+    ]
+    .into_iter()
+    .filter_map(|(name, model)| {
+        let model = model.as_ref()?;
+        let current = registry.model_ref(&model.id)?;
+        (current.version != model.version).then(|| name.to_string())
+    })
+    .collect()
 }
 
 /// Save the open document as a project: to `path`, or to the project it
@@ -809,7 +864,10 @@ fn start_background_separation(app: tauri::AppHandle, state: State<'_, AppState>
         let state = app.state::<AppState>();
         let mut document = state.document.lock().map_err(|_| JobError::new("internal", "document lock"))?;
         match document.as_mut().filter(|d| d.serial == serial) {
-            Some(document) => document.matte = Some(Arc::new(matte)),
+            Some(document) => {
+                document.matte = Some(Arc::new(matte));
+                document.matte_model = Some(report.model.clone());
+            }
             None => return Err(JobError::new("cancelled", "another image was opened")),
         }
         let mut value = serde_json::to_value(report).map_err(|e| JobError::new("internal", e.to_string()))?;
@@ -835,7 +893,10 @@ fn start_shape_estimation(app: tauri::AppHandle, state: State<'_, AppState>) -> 
         let state = app.state::<AppState>();
         let mut document = state.document.lock().map_err(|_| JobError::new("internal", "document lock"))?;
         match document.as_mut().filter(|d| d.serial == serial) {
-            Some(document) => document.shape = Some(Arc::new(shape)),
+            Some(document) => {
+                document.shape = Some(Arc::new(shape));
+                document.shape_model = Some(report.model.clone());
+            }
             None => return Err(JobError::new("cancelled", "another image was opened")),
         }
         let mut value = serde_json::to_value(report).map_err(|e| JobError::new("internal", e.to_string()))?;
@@ -879,11 +940,95 @@ async fn add_background_image(path: String, state: State<'_, AppState>) -> Resul
     .map_err(|_| "internal".to_string())??;
     let mut document = state.document.lock().map_err(|_| "internal".to_string())?;
     let document = document.as_mut().ok_or_else(|| "no_document".to_string())?;
-    document.background_images.push(BackgroundImage {
+    document.images.push(DocImage {
         file: original,
         source: Some(Arc::new(source)),
     });
-    Ok(document.background_images.len() as u32)
+    Ok(document.images.len() as u32)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelOverview {
+    #[serde(flatten)]
+    info: ModelInfo,
+    /// "directml" or "cpu" when the model is loaded now.
+    loaded: Option<String>,
+    /// The feature that uses it.
+    used_for: Option<String>,
+}
+
+fn provider_name(provider: application_core::Provider) -> String {
+    match provider {
+        application_core::Provider::DirectMl => "directml",
+        application_core::Provider::Cpu => "cpu",
+    }
+    .to_string()
+}
+
+/// Every registered model: version, license, whether its file is there,
+/// and whether it is loaded.
+#[tauri::command]
+fn model_overview(state: State<'_, AppState>) -> Result<Vec<ModelOverview>, String> {
+    let registry = Registry::load(&state.models_dir).map_err(|e| e.code().to_string())?;
+    let detector_loaded = state
+        .detector
+        .lock()
+        .map_err(|_| "internal".to_string())?
+        .as_ref()
+        .map(|(s, _)| provider_name(s.provider()));
+    Ok(registry
+        .inspect()
+        .into_iter()
+        .map(|info| {
+            let (loaded, used_for) = match info.id.as_str() {
+                portrait::FACE_MODEL => (detector_loaded.clone(), Some("portrait")),
+                separation::BACKGROUND_MODEL => {
+                    (state.background_model.loaded_provider().map(provider_name), Some("background"))
+                }
+                separation::DEPTH_MODEL => (state.depth_model.loaded_provider().map(provider_name), Some("lighting")),
+                "test-luma" => (None, Some("selfTest")),
+                _ => (None, None),
+            };
+            ModelOverview {
+                info,
+                loaded,
+                used_for: used_for.map(str::to_string),
+            }
+        })
+        .collect())
+}
+
+/// Check every model's file against its recorded SHA-256, as a background
+/// job; the result lists each model with its problem (null when fine).
+#[tauri::command]
+fn verify_models(state: State<'_, AppState>) -> Result<u64, String> {
+    let models_dir = state.models_dir.clone();
+    Ok(state.jobs.start(move |ctx| {
+        let registry = Registry::load(&models_dir).map_err(|e| JobError::new(e.code(), e.to_string()))?;
+        let ids: Vec<String> = registry.models().iter().map(|m| m.id.clone()).collect();
+        let mut results = Vec::new();
+        for (done, id) in ids.iter().enumerate() {
+            ctx.check()?;
+            ctx.progress(done as f32 / ids.len().max(1) as f32, id);
+            let problem = registry.verify(id).err().map(|e| e.code().to_string());
+            results.push(serde_json::json!({ "id": id, "problem": problem }));
+        }
+        ctx.progress(1.0, "done");
+        Ok(serde_json::json!({ "models": results }))
+    }))
+}
+
+/// Release every loaded model to free memory; each loads again when next
+/// used. Returns how many were loaded.
+#[tauri::command]
+fn unload_models(state: State<'_, AppState>) -> Result<u32, String> {
+    let detector = state.detector.lock().map_err(|_| "internal".to_string())?.take().is_some();
+    let count = [detector, state.background_model.unload(), state.depth_model.unload()]
+        .into_iter()
+        .filter(|&released| released)
+        .count();
+    Ok(count as u32)
 }
 
 #[tauri::command]
@@ -1021,6 +1166,9 @@ fn main() {
             auto_enhance,
             start_background_separation,
             start_shape_estimation,
+            model_overview,
+            verify_models,
+            unload_models,
             background_status,
             add_background_image,
             thumbnail,

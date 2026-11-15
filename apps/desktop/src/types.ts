@@ -42,6 +42,31 @@ export interface DocumentStatus {
   projectPath: string | null;
   /** Background images a project refers to that could not be found. */
   missingBackgrounds: number;
+  /** AI results ("faces", "matte", "shape") made by an older or newer model version. */
+  outdated: string[];
+}
+
+/** One registered AI model (Settings → AI models). */
+export interface ModelOverview {
+  id: string;
+  version: string;
+  purpose: string;
+  /** File size in bytes; null when the file is missing. */
+  size: number | null;
+  sha256: string;
+  license: {
+    license: string;
+    approved: boolean;
+    source: string | null;
+    commercialUse: boolean | null;
+    checkedOn: string | null;
+  } | null;
+  /** Why it cannot be used (an error code); null when usable. */
+  problem: string | null;
+  /** "directml" or "cpu" when loaded now. */
+  loaded: string | null;
+  /** "portrait", "background", "lighting" or "selfTest". */
+  usedFor: string | null;
 }
 
 export interface FileInfo {

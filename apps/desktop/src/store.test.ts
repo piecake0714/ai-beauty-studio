@@ -73,7 +73,10 @@ function fakeApi(overrides: Partial<Api> = {}): Api {
     pickSavePath: vi.fn(async (_name: string, extension: string) => `C:\\out\\saved.${extension}`),
     openProject: vi.fn(openProjectLike),
     inspectProject: vi.fn(async () => ({ originalPath: "D:\\old\\a.jpg", savedAt: 1 })),
-    documentStatus: vi.fn(async () => ({ serial, originalPath: openedPath, projectPath, missingBackgrounds: 0 })),
+    documentStatus: vi.fn(async () => ({ serial, originalPath: openedPath, projectPath, missingBackgrounds: 0, outdated: [] as string[] })),
+    modelOverview: vi.fn(async () => []),
+    verifyModels: vi.fn(async () => 11),
+    unloadModels: vi.fn(async () => 2),
     backgroundStatus: vi.fn(async () => ({ serial, ready: false, shapeReady: false })),
     saveProject: vi.fn(async (path: string | null) => {
       if (!path && !projectPath) return Promise.reject("needs_path");
@@ -620,5 +623,22 @@ describe("app store", () => {
     await store.getState().init();
     expect(api.openProject).toHaveBeenCalledWith("C:\\work\\portrait.aibs", null);
     expect(store.getState().view).toBe("editor");
+  });
+
+  it("marks AI results made by another model version until they are redone", async () => {
+    const api = fakeApi();
+    api.documentStatus = vi.fn(async () => ({
+      serial: 1,
+      originalPath: "C:\\照片\\a.jpg",
+      projectPath: "C:\\work\\portrait.aibs",
+      missingBackgrounds: 0,
+      outdated: ["matte", "shape"],
+    }));
+    const store = createAppStore(api);
+    await store.getState().openPath("C:\\work\\portrait.aibs");
+    expect(store.getState().outdated).toEqual(["matte", "shape"]);
+    await store.getState().startSeparation();
+    store.getState().receiveJobUpdate({ state: "finished", id: 7, result: { provider: "cpu" } });
+    expect(store.getState().outdated).toEqual(["shape"]);
   });
 });

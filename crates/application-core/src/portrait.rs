@@ -7,7 +7,7 @@
 use engine_sys::{AiSession, Face, Provider, Source};
 use serde::Serialize;
 
-use crate::models::Registry;
+use crate::models::{ModelRef, Registry};
 
 /// The face detection model (YuNet).
 pub const FACE_MODEL: &str = "face-yunet";
@@ -18,9 +18,10 @@ pub const MIN_FACE_SCORE: f32 = 0.6;
 /// Load the face detector through the registry checks (license and hash).
 /// It runs on the CPU: it is small, runs once per image, and this keeps
 /// the GPU free for rendering.
-pub fn open_detector(registry: &Registry) -> Result<AiSession, String> {
-    let (_, bytes) = registry.load_model(FACE_MODEL).map_err(|e| e.code().to_string())?;
-    AiSession::open(&bytes, Provider::Cpu).map_err(|_| "model_load_failed".to_string())
+pub fn open_detector(registry: &Registry) -> Result<(AiSession, ModelRef), String> {
+    let (entry, bytes) = registry.load_model(FACE_MODEL).map_err(|e| e.code().to_string())?;
+    let session = AiSession::open(&bytes, Provider::Cpu).map_err(|_| "model_load_failed".to_string())?;
+    Ok((session, ModelRef { id: entry.id, version: entry.version }))
 }
 
 pub fn detect(source: &Source, detector: &AiSession) -> Result<Vec<Face>, String> {
@@ -47,7 +48,8 @@ mod tests {
     #[test]
     fn the_shipped_face_model_loads_and_finds_no_faces_in_a_gradient() {
         let registry = Registry::load(&repo_models()).unwrap();
-        let detector = open_detector(&registry).unwrap();
+        let (detector, model) = open_detector(&registry).unwrap();
+        assert_eq!(model.id, FACE_MODEL);
         let png = include_bytes!("../../../tests/fixtures/gradient_64x48.png");
         let source = Source::open(png).unwrap();
         assert!(detect(&source, &detector).unwrap().is_empty());
