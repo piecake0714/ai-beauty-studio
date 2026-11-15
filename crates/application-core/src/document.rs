@@ -37,6 +37,9 @@ pub enum LightSetting {
     Softbox,
 }
 
+/// Pixel tolerance when a crop edge is turned into whole pixels.
+const CROP_SNAP: f64 = 0.01;
+
 /// Most layers a document may have.
 pub const MAX_LAYERS: usize = 16;
 /// Most strokes on one layer mask.
@@ -79,10 +82,14 @@ impl Crop {
     /// pixels: (x, y, w, h), at least 1 x 1.
     pub fn rect(&self, width: u32, height: u32) -> (u32, u32, u32, u32) {
         let c = self.clamped();
-        let x0 = ((c.x * width as f32).floor() as u32).min(width.saturating_sub(1));
-        let y0 = ((c.y * height as f32).floor() as u32).min(height.saturating_sub(1));
-        let x1 = (((c.x + c.width) * width as f32).ceil() as u32).clamp(x0 + 1, width.max(x0 + 1));
-        let y1 = (((c.y + c.height) * height as f32).ceil() as u32).clamp(y0 + 1, height.max(y0 + 1));
+        // Edges within a hundredth of a pixel of a whole pixel snap to it,
+        // so rounding in the fractions does not add a row or column.
+        let down = |v: f32, size: u32| (f64::from(v) * f64::from(size) + CROP_SNAP).floor() as u32;
+        let up = |v: f32, size: u32| (f64::from(v) * f64::from(size) - CROP_SNAP).ceil().max(0.0) as u32;
+        let x0 = down(c.x, width).min(width.saturating_sub(1));
+        let y0 = down(c.y, height).min(height.saturating_sub(1));
+        let x1 = up(c.x + c.width, width).clamp(x0 + 1, width.max(x0 + 1));
+        let y1 = up(c.y + c.height, height).clamp(y0 + 1, height.max(y0 + 1));
         (x0, y0, x1 - x0, y1 - y0)
     }
 }

@@ -74,10 +74,13 @@ export function cropRect(crop: Crop | undefined, size: { width: number; height: 
   height: number;
 } {
   const c = crop ?? FULL_CROP;
-  const x0 = Math.min(Math.floor(c.x * size.width), size.width - 1);
-  const y0 = Math.min(Math.floor(c.y * size.height), size.height - 1);
-  const x1 = Math.min(Math.max(Math.ceil((c.x + c.width) * size.width), x0 + 1), size.width);
-  const y1 = Math.min(Math.max(Math.ceil((c.y + c.height) * size.height), y0 + 1), size.height);
+  // As the core: edges within a hundredth of a pixel snap to it.
+  const down = (v: number, n: number) => Math.floor(v * n + 0.01);
+  const up = (v: number, n: number) => Math.max(0, Math.ceil(v * n - 0.01));
+  const x0 = Math.max(0, Math.min(down(c.x, size.width), size.width - 1));
+  const y0 = Math.max(0, Math.min(down(c.y, size.height), size.height - 1));
+  const x1 = Math.min(Math.max(up(c.x + c.width, size.width), x0 + 1), size.width);
+  const y1 = Math.min(Math.max(up(c.y + c.height, size.height), y0 + 1), size.height);
   return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
 }
 
