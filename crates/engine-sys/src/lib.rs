@@ -44,10 +44,20 @@ extern "C" {
         h: f64,
         out_width: u32,
         out_height: u32,
+        portrait: *const PortraitRaw,
         adjustments: *const Adjustments,
         original_columns: u32,
         out: *mut AibsImage,
     ) -> i32;
+    fn aibs_detect_faces(
+        source: *const AibsSourceRaw,
+        detector: *mut AiSessionRaw,
+        min_score: f32,
+        out: *mut Face,
+        capacity: u32,
+        count: *mut u32,
+    ) -> i32;
+    fn aibs_auto_adjust(source: *const AibsSourceRaw, faces: *const Face, face_count: u32, out: *mut Adjustments) -> i32;
     fn aibs_gpu_list(out: *mut GpuInfoRaw, capacity: u32) -> u32;
     fn aibs_ai_runtime_version() -> *const c_char;
     fn aibs_ai_open(
@@ -99,6 +109,40 @@ pub struct Adjustments {
     pub hsl_saturation: [f32; HSL_BANDS],
     pub hsl_luminance: [f32; HSL_BANDS],
 }
+
+/// A detected face, in source pixels. Landmarks are (x, y) pairs: right
+/// eye, left eye, nose tip, right and left mouth corners (from the
+/// viewer's side: the person's right eye is on the left of the picture).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Face {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub landmarks: [f32; 10],
+    pub score: f32,
+    /// Skin colour model: mean Cb, mean Cr, var Cb, var Cr, cov Cb/Cr.
+    pub skin: [f32; 5],
+}
+
+/// Portrait retouching applied while rendering.
+#[derive(Debug, Clone, Copy)]
+pub struct Portrait<'a> {
+    pub faces: &'a [Face],
+    /// 0 (off) to 100.
+    pub smoothing: f32,
+}
+
+#[repr(C)]
+struct PortraitRaw {
+    faces: *const Face,
+    face_count: u32,
+    smoothing: f32,
+}
+
+/// Most faces reported for one photo.
+pub const MAX_FACES: usize = 32;
 
 /// Apply adjustments to packed 8-bit RGB pixels exactly as rendering does.
 pub fn adjust_rgb8(adjustments: &Adjustments, rgb: &mut [u8]) {
@@ -361,11 +405,12 @@ impl Source {
         out_width: u32,
         out_height: u32,
     ) -> Result<RgbaImage, EngineError> {
-        self.render_adjusted(x, y, w, h, out_width, out_height, None, 0)
+        self.render_adjusted(x, y, w, h, out_width, out_height, None, None, 0)
     }
 
-    /// Like [`Source::render`], applying `adjustments` to every output column
-    /// from `original_columns` on (the columns left of it show the original).
+    /// Like [`Source::render`], applying portrait retouching and then
+    /// `adjustments` to every output column from `original_columns` on (the
+    /// columns left of it show the original).
     #[allow(clippy::too_many_arguments)]
     pub fn render_adjusted(
         &self,
@@ -375,10 +420,17 @@ impl Source {
         h: f64,
         out_width: u32,
         out_height: u32,
+        portrait: Option<Portrait<'_>>,
         adjustments: Option<&Adjustments>,
         original_columns: u32,
     ) -> Result<RgbaImage, EngineError> {
         let mut raw = empty_image();
+        let portrait_raw = portrait.map(|p| PortraitRaw {
+            faces: p.faces.as_ptr(),
+            face_count: p.faces.len().min(MAX_FACES) as u32,
+            smoothing: p.smoothing,
+        });
+        let portrait_ptr = portrait_raw.as_ref().map_or(std::ptr::null(), |p| p as *const PortraitRaw);
         let adjustments_ptr = adjustments.map_or(std::ptr::null(), |a| a as *const Adjustments);
         // SAFETY: `self.raw` is valid for the lifetime of `self`; the
         // adjustments pointer is null or valid for the call; `raw` is writable.
@@ -391,6 +443,7 @@ impl Source {
                 h,
                 out_width,
                 out_height,
+                portrait_ptr,
                 adjustments_ptr,
                 original_columns,
                 &mut raw,
@@ -398,6 +451,30 @@ impl Source {
         })?;
         // SAFETY: the render succeeded, so `raw` holds an engine image.
         Ok(unsafe { take_image(raw) })
+    }
+
+    /// Find faces with the YuNet detector session `detector`. Each face
+    /// comes with its skin colour measured. Faces scoring below
+    /// `min_score` (0..1) are left out.
+    pub fn detect_faces(&self, detector: &AiSession, min_score: f32) -> Result<Vec<Face>, EngineError> {
+        let mut faces = vec![Face::default(); MAX_FACES];
+        let mut count = 0u32;
+        // SAFETY: both handles are valid; `faces` has room for MAX_FACES.
+        status_to_result(unsafe {
+            aibs_detect_faces(self.raw, detector.raw, min_score, faces.as_mut_ptr(), MAX_FACES as u32, &mut count)
+        })?;
+        faces.truncate((count as usize).min(MAX_FACES));
+        Ok(faces)
+    }
+
+    /// Suggested adjustments for one-click enhancement.
+    pub fn auto_adjust(&self, faces: &[Face]) -> Result<Adjustments, EngineError> {
+        let mut out = Adjustments::default();
+        // SAFETY: `faces` is valid for its length; `out` is writable.
+        status_to_result(unsafe {
+            aibs_auto_adjust(self.raw, faces.as_ptr(), faces.len().min(MAX_FACES) as u32, &mut out)
+        })?;
+        Ok(out)
     }
 
     /// Render the whole image so that its longer side is at most `max_side`.
@@ -561,14 +638,14 @@ mod tests {
         let original = source.render(0.0, 0.0, 64.0, 48.0, 64, 48).unwrap();
         let zero = Adjustments::default();
         let unchanged = source
-            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, Some(&zero), 0)
+            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&zero), 0)
             .unwrap();
         assert_eq!(unchanged.pixels, original.pixels);
 
         let mut look = Adjustments { exposure: -1.0, saturation: 40.0, ..Default::default() };
         look.hsl_hue[0] = 50.0;
         let split = source
-            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, Some(&look), 32)
+            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&look), 32)
             .unwrap();
         for col in [0usize, 31, 32, 63] {
             let p = (10 * 64 + col) * 4;
@@ -632,5 +709,35 @@ mod tests {
         for handle in handles {
             assert_eq!(handle.join().unwrap().width, 32);
         }
+    }
+
+    #[test]
+    fn portrait_without_faces_changes_nothing() {
+        let source = Source::open(PNG).unwrap();
+        let plain = source.render(0.0, 0.0, 64.0, 48.0, 64, 48).unwrap();
+        let portrait = Portrait { faces: &[], smoothing: 100.0 };
+        let with = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, Some(portrait), None, 0).unwrap();
+        assert_eq!(plain.pixels, with.pixels);
+    }
+
+    #[test]
+    fn auto_adjust_suggests_slider_values() {
+        let source = Source::open(PNG).unwrap();
+        let suggested = source.auto_adjust(&[]).unwrap();
+        assert!(suggested.exposure.abs() <= 2.0);
+        assert!(suggested.vibrance > 0.0);
+        assert_eq!(suggested.hsl_hue, [0.0; HSL_BANDS]);
+    }
+
+    #[test]
+    fn detect_faces_finds_none_in_a_gradient() {
+        let model = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../models/files/face_detection_yunet_2023mar.onnx"
+        ))
+        .expect("face model missing: run scripts/fetch_models.py");
+        let detector = AiSession::open(&model, Provider::Cpu).unwrap();
+        let source = Source::open(PNG).unwrap();
+        assert_eq!(source.detect_faces(&detector, 0.6).unwrap(), Vec::<Face>::new());
     }
 }

@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { BANDS, BEGINNER, COLOUR, hasHiddenInBeginner, isIdentity, LIGHT, withBand, withScalar } from "../adjustments";
+import { BANDS, BEGINNER, COLOUR, hasHiddenInBeginner, isIdentity, LIGHT, PORTRAIT, withBand, withScalar } from "../adjustments";
 import { useApp, useAppStore, useI18n } from "../context";
-import type { MessageKey } from "../i18n";
+import { errorMessage, type MessageKey } from "../i18n";
 import { HSL_BANDS, type BandAdjustment, type ScalarAdjustment } from "../types";
 
 const signed = (digits: number) => (value: number) => {
@@ -21,6 +21,7 @@ const RANGE: Record<ScalarAdjustment, { min: number; max: number; step: number; 
   tint: { min: -100, max: 100, step: 1, format: signed(0) },
   vibrance: { min: -100, max: 100, step: 1, format: signed(0) },
   saturation: { min: -100, max: 100, step: 1, format: signed(0) },
+  skinSmoothing: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
 };
 
 /** Swatch colours for the HSL band labels. */
@@ -70,6 +71,25 @@ function Slider(props: SliderProps) {
         }}
       />
     </div>
+  );
+}
+
+function FaceNote() {
+  const { t, language } = useI18n();
+  const faces = useApp((s) => s.faces);
+  if (!faces) return null;
+  const text =
+    faces.state === "detecting"
+      ? t("faces.detecting")
+      : faces.state === "unavailable"
+        ? t("faces.unavailable", { reason: errorMessage(language, faces.code) })
+        : faces.count === 0
+          ? t("faces.none")
+          : t("faces.found", { count: faces.count });
+  return (
+    <p className="note" role="status">
+      {text}
+    </p>
   );
 }
 
@@ -142,6 +162,12 @@ export function AdjustPanel() {
       <section aria-labelledby="colour-title">
         <h2 id="colour-title">{t("adjust.colour")}</h2>
         {visible(COLOUR).map(scalar)}
+      </section>
+
+      <section aria-labelledby="portrait-title">
+        <h2 id="portrait-title">{t("adjust.portrait")}</h2>
+        <FaceNote />
+        {visible(PORTRAIT).map(scalar)}
       </section>
 
       {advanced && (

@@ -6,6 +6,7 @@ import type {
   Adjustments,
   EditorMode,
   EditState,
+  FacesReport,
   FileInfo,
   LanguagePreference,
   Settings,
@@ -34,6 +35,12 @@ export interface Api {
   /** Record adjustments as one undoable step. */
   commitAdjustments(adjustments: Adjustments): Promise<EditState>;
   undo(): Promise<EditState>;
+  /** Face detection state of the open image. */
+  facesStatus(): Promise<FacesReport>;
+  /** Receive face detection results; resolves to a function that stops listening. */
+  onFaces(handler: (report: FacesReport) => void): Promise<() => void>;
+  /** One-click enhancement, recorded as one undoable step. */
+  autoEnhance(): Promise<EditState>;
   redo(): Promise<EditState>;
   hardwareInfo(): Promise<Hardware>;
   /** Start the AI self-test; resolves to its job id. */
@@ -89,6 +96,9 @@ export const tauriApi: Api = {
   editState: () => invoke("edit_state"),
   commitAdjustments: (adjustments) => invoke("commit_adjustments", { adjustments }),
   undo: () => invoke("undo"),
+  facesStatus: () => invoke("faces_status"),
+  onFaces: (handler) => listen<FacesReport>("faces", (event) => handler(event.payload)),
+  autoEnhance: () => invoke("auto_enhance"),
   redo: () => invoke("redo"),
   hardwareInfo: () => invoke("hardware_info"),
   startAiSelfTest: () => invoke("start_ai_self_test"),

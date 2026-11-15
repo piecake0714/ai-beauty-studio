@@ -10,9 +10,10 @@ use application_core::ai::{self, Hardware};
 use application_core::document::{Adjustments, EditState, History};
 use application_core::jobs::{JobError, Jobs};
 use application_core::models::Registry;
+use application_core::portrait::{self, FaceStatus};
 use application_core::info::{self, FileInfo};
 use application_core::settings::{self, EditorMode, LanguagePreference, Settings, ThemePreference};
-use application_core::{EngineError, Source};
+use application_core::{AiSession, EngineError, Face, Portrait, Source};
 use tauri::ipc::Response;
 use tauri::path::BaseDirectory;
 use tauri::{Emitter, Manager, State};
@@ -30,10 +31,31 @@ const THUMBNAIL_MAX_DIMENSION: u32 = 320;
 const NOTICES_FILE: &str = "THIRD_PARTY_NOTICES.txt";
 
 struct OpenDocument {
+    /// Increases with every opened image, so late face results for an
+    /// image that was replaced are dropped.
+    serial: u64,
     /// The original image at full resolution; never modified.
     source: Arc<Source>,
     /// Committed adjustments and their undo history.
     history: History,
+    /// Faces found in the image (empty until detection finishes).
+    faces: Arc<Vec<Face>>,
+    faces_status: FaceStatus,
+}
+
+impl OpenDocument {
+    /// What a render needs: the source and the faces to retouch.
+    fn render_inputs(&self) -> (Arc<Source>, Arc<Vec<Face>>) {
+        (self.source.clone(), self.faces.clone())
+    }
+}
+
+/// Sent to the UI as a "faces" event when detection for an image ends.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FacesEvent {
+    serial: u64,
+    status: FaceStatus,
 }
 
 struct AppState {
@@ -49,6 +71,23 @@ struct AppState {
     jobs: Arc<Jobs>,
     /// Folder holding the model registry (bundled with the app).
     models_dir: PathBuf,
+    /// Serial of the last opened image.
+    document_serial: AtomicU64,
+    /// The face detector, loaded on first use and kept.
+    detector: Mutex<Option<Arc<AiSession>>>,
+}
+
+impl AppState {
+    fn face_detector(&self) -> Result<Arc<AiSession>, String> {
+        let mut slot = self.detector.lock().map_err(|_| "internal".to_string())?;
+        if let Some(detector) = slot.as_ref() {
+            return Ok(detector.clone());
+        }
+        let registry = Registry::load(&self.models_dir).map_err(|e| e.code().to_string())?;
+        let detector = Arc::new(portrait::open_detector(&registry)?);
+        *slot = Some(detector.clone());
+        Ok(detector)
+    }
 }
 
 impl AppState {
@@ -109,7 +148,7 @@ fn engine_error_code(error: EngineError) -> String {
 /// on a worker thread so the UI stays responsive. Errors are stable codes
 /// that the UI maps to localized messages.
 #[tauri::command]
-async fn open_image(path: String, state: State<'_, AppState>) -> Result<Response, String> {
+async fn open_image(path: String, app: tauri::AppHandle, state: State<'_, AppState>) -> Result<Response, String> {
     let file = PathBuf::from(&path);
     let (source, overview) = tauri::async_runtime::spawn_blocking(move || {
         let source = application_core::open_document(&file).map_err(|e| e.code().to_string())?;
@@ -119,9 +158,32 @@ async fn open_image(path: String, state: State<'_, AppState>) -> Result<Response
     .await
     .map_err(|_| "internal".to_string())??;
 
+    let source = Arc::new(source);
+    let serial = state.document_serial.fetch_add(1, Ordering::SeqCst) + 1;
     *state.document.lock().map_err(|_| "internal".to_string())? = Some(OpenDocument {
-        source: Arc::new(source),
+        serial,
+        source: source.clone(),
         history: History::default(),
+        faces: Arc::new(Vec::new()),
+        faces_status: FaceStatus::Detecting,
+    });
+    // Find faces in the background; the image is usable meanwhile.
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let result = state
+            .face_detector()
+            .and_then(|detector| portrait::detect(&source, &detector));
+        let status = match &result {
+            Ok(faces) => FaceStatus::Ready { count: faces.len() },
+            Err(code) => FaceStatus::Unavailable { code: code.clone() },
+        };
+        if let Ok(mut document) = state.document.lock() {
+            if let Some(document) = document.as_mut().filter(|d| d.serial == serial) {
+                document.faces = Arc::new(result.unwrap_or_default());
+                document.faces_status = status.clone();
+                let _ = app.emit("faces", FacesEvent { serial, status });
+            }
+        }
     });
     // The image opened; failing to save the recent list must not block it.
     let _ = state.update(|s| s.add_recent(&path, now_seconds()));
@@ -158,18 +220,19 @@ async fn render_view(request: RenderRequest, state: State<'_, AppState>) -> Resu
         return Err("invalid_request".to_string());
     }
     state.latest_render.fetch_max(request.id, Ordering::SeqCst);
-    let source = state
+    let (source, faces) = state
         .document
         .lock()
         .map_err(|_| "internal".to_string())?
         .as_ref()
-        .map(|document| document.source.clone())
+        .map(OpenDocument::render_inputs)
         .ok_or_else(|| "no_document".to_string())?;
 
     let latest = state.inner().latest_render.load(Ordering::SeqCst);
     if request.id < latest {
         return Err("superseded".to_string());
     }
+    let smoothing = request.adjustments.clamped().skin_smoothing;
     let adjustments = request.adjustments.to_engine();
     let image = tauri::async_runtime::spawn_blocking(move || {
         source.render_adjusted(
@@ -179,6 +242,7 @@ async fn render_view(request: RenderRequest, state: State<'_, AppState>) -> Resu
             request.height,
             request.out_width,
             request.out_height,
+            Some(Portrait { faces: &faces, smoothing }),
             Some(&adjustments),
             request.original_columns,
         )
@@ -197,13 +261,14 @@ async fn render_view(request: RenderRequest, state: State<'_, AppState>) -> Resu
 /// canvas draws it under sharper renders, e.g. at the edges while panning.
 #[tauri::command]
 async fn render_overview(adjustments: Adjustments, state: State<'_, AppState>) -> Result<Response, String> {
-    let source = state
+    let (source, faces) = state
         .document
         .lock()
         .map_err(|_| "internal".to_string())?
         .as_ref()
-        .map(|document| document.source.clone())
+        .map(OpenDocument::render_inputs)
         .ok_or_else(|| "no_document".to_string())?;
+    let smoothing = adjustments.clamped().skin_smoothing;
     let adjustments = adjustments.to_engine();
     let image = tauri::async_runtime::spawn_blocking(move || {
         let longer = source.width().max(source.height()).max(1);
@@ -217,6 +282,7 @@ async fn render_overview(adjustments: Adjustments, state: State<'_, AppState>) -
             source.height() as f64,
             out_w,
             out_h,
+            Some(Portrait { faces: &faces, smoothing }),
             Some(&adjustments),
             0,
         )
@@ -258,6 +324,43 @@ fn redo(state: State<'_, AppState>) -> Result<EditState, String> {
     with_history(&state, |history| {
         history.redo();
     })
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FacesReply {
+    serial: u64,
+    status: FaceStatus,
+}
+
+/// Face detection state of the open image (also sent as "faces" events).
+#[tauri::command]
+fn faces_status(state: State<'_, AppState>) -> Result<FacesReply, String> {
+    let document = state.document.lock().map_err(|_| "internal".to_string())?;
+    let document = document.as_ref().ok_or_else(|| "no_document".to_string())?;
+    Ok(FacesReply {
+        serial: document.serial,
+        status: document.faces_status.clone(),
+    })
+}
+
+/// One-click enhancement: replace the light and colour values with values
+/// suggested from the image (aimed at faces when there are any), as one
+/// undoable step. Skin smoothing is kept.
+#[tauri::command]
+async fn auto_enhance(state: State<'_, AppState>) -> Result<EditState, String> {
+    let (source, faces) = state
+        .document
+        .lock()
+        .map_err(|_| "internal".to_string())?
+        .as_ref()
+        .map(OpenDocument::render_inputs)
+        .ok_or_else(|| "no_document".to_string())?;
+    let suggested = tauri::async_runtime::spawn_blocking(move || source.auto_adjust(&faces))
+        .await
+        .map_err(|_| "internal".to_string())?
+        .map_err(engine_error_code)?;
+    with_history(&state, |history| history.commit(history.current().with_colour(suggested)))
 }
 
 #[tauri::command]
@@ -356,6 +459,8 @@ fn main() {
                 latest_render: AtomicU64::new(0),
                 jobs,
                 models_dir,
+                document_serial: AtomicU64::new(0),
+                detector: Mutex::new(None),
             });
             Ok(())
         })
@@ -369,6 +474,8 @@ fn main() {
             commit_adjustments,
             undo,
             redo,
+            faces_status,
+            auto_enhance,
             thumbnail,
             file_info,
             set_theme,

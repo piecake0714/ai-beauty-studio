@@ -1,0 +1,13 @@
+{
+  "model": "face-yunet",
+  "version": "2023mar",
+  "source": "OpenCV Zoo, models/face_detection_yunet (https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet), mirrored at huggingface.co/opencv/opencv_zoo",
+  "license": "MIT",
+  "licenseText": "licenses/face-yunet.LICENSE.txt (downloaded with the model by scripts/fetch_models.py)",
+  "commercialUse": true,
+  "trainingData": "WIDER FACE, per the upstream README; the MIT license covers the published model files",
+  "notes": "Detector only: outputs face boxes and five landmarks. Used to place skin smoothing and to aim one-click enhancement.",
+  "checkedOn": "2026-11-15",
+  "checkedBy": "Project maintainer",
+  "approved": true
+}

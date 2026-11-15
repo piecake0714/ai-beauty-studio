@@ -1,4 +1,5 @@
 #include "aibs/engine.h"
+#include "session_internal.h"
 
 // dml_provider_factory.h pulls in windows.h; keep its min/max macros out.
 #ifndef NOMINMAX
@@ -25,7 +26,7 @@
 struct aibs_ai_session {
     std::unique_ptr<Ort::Session> session;
     std::string input_name;
-    std::string output_name;
+    std::vector<std::string> output_names;
 };
 
 namespace {
@@ -142,13 +143,15 @@ int32_t aibs_ai_open(const uint8_t* model, size_t len, int32_t preferred, aibs_a
             session = std::make_unique<Ort::Session>(environment(), model, len, options);
         }
 
-        if (session->GetInputCount() != 1 || session->GetOutputCount() != 1) {
+        if (session->GetInputCount() != 1 || session->GetOutputCount() == 0) {
             return AIBS_ERR_MODEL_INVALID;
         }
         Ort::AllocatorWithDefaultOptions allocator;
         auto handle = std::make_unique<aibs_ai_session>();
         handle->input_name = session->GetInputNameAllocated(0, allocator).get();
-        handle->output_name = session->GetOutputNameAllocated(0, allocator).get();
+        for (size_t o = 0; o < session->GetOutputCount(); ++o) {
+            handle->output_names.push_back(session->GetOutputNameAllocated(o, allocator).get());
+        }
         handle->session = std::move(session);
         *used_provider = used;
         *out = handle.release();
@@ -163,13 +166,12 @@ int32_t aibs_ai_open(const uint8_t* model, size_t len, int32_t preferred, aibs_a
     }
 }
 
-int32_t aibs_ai_run(aibs_ai_session* session, const float* input, const int64_t* shape, size_t rank,
-                    float** output, int64_t* out_shape, size_t* out_rank) {
-    if (output != nullptr) {
-        *output = nullptr;
-    }
-    if (session == nullptr || input == nullptr || shape == nullptr || rank == 0 || rank > 8 ||
-        output == nullptr || out_shape == nullptr || out_rank == nullptr) {
+namespace aibs {
+
+int32_t run_all_outputs(aibs_ai_session* session, const float* input, const int64_t* shape, size_t rank,
+                        std::vector<NamedTensor>& outputs) {
+    outputs.clear();
+    if (session == nullptr || input == nullptr || shape == nullptr || rank == 0 || rank > 8) {
         return AIBS_ERR_INVALID_ARGUMENT;
     }
     size_t count = 1;
@@ -179,36 +181,31 @@ int32_t aibs_ai_run(aibs_ai_session* session, const float* input, const int64_t*
         }
         count *= static_cast<size_t>(shape[i]);
     }
-
     try {
         const Ort::MemoryInfo memory = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
         Ort::Value tensor = Ort::Value::CreateTensor<float>(memory, const_cast<float*>(input), count, shape, rank);
         const char* input_names[] = {session->input_name.c_str()};
-        const char* output_names[] = {session->output_name.c_str()};
-        std::vector<Ort::Value> results =
-            session->session->Run(Ort::RunOptions{nullptr}, input_names, &tensor, 1, output_names, 1);
-        if (results.size() != 1 || !results[0].IsTensor()) {
-            return AIBS_ERR_INFERENCE_FAILED;
+        std::vector<const char*> output_names;
+        for (const std::string& name : session->output_names) {
+            output_names.push_back(name.c_str());
         }
-        const Ort::TensorTypeAndShapeInfo info = results[0].GetTensorTypeAndShapeInfo();
-        if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-            return AIBS_ERR_INFERENCE_FAILED;
+        std::vector<Ort::Value> results = session->session->Run(Ort::RunOptions{nullptr}, input_names, &tensor, 1,
+                                                                output_names.data(), output_names.size());
+        for (size_t o = 0; o < results.size(); ++o) {
+            if (!results[o].IsTensor()) {
+                return AIBS_ERR_INFERENCE_FAILED;
+            }
+            const Ort::TensorTypeAndShapeInfo info = results[o].GetTensorTypeAndShapeInfo();
+            if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+                return AIBS_ERR_INFERENCE_FAILED;
+            }
+            NamedTensor named;
+            named.name = session->output_names[o];
+            named.shape = info.GetShape();
+            const float* data = results[o].GetTensorData<float>();
+            named.data.assign(data, data + info.GetElementCount());
+            outputs.push_back(std::move(named));
         }
-        const std::vector<int64_t> dims = info.GetShape();
-        if (dims.size() > 8) {
-            return AIBS_ERR_INFERENCE_FAILED;
-        }
-        const size_t elements = info.GetElementCount();
-        float* buffer = static_cast<float*>(std::malloc(std::max<size_t>(elements, 1) * sizeof(float)));
-        if (buffer == nullptr) {
-            return AIBS_ERR_OUT_OF_MEMORY;
-        }
-        std::memcpy(buffer, results[0].GetTensorData<float>(), elements * sizeof(float));
-        for (size_t d = 0; d < dims.size(); ++d) {
-            out_shape[d] = dims[d];
-        }
-        *out_rank = dims.size();
-        *output = buffer;
         return AIBS_OK;
     } catch (const Ort::Exception&) {
         return AIBS_ERR_INFERENCE_FAILED;
@@ -217,6 +214,39 @@ int32_t aibs_ai_run(aibs_ai_session* session, const float* input, const int64_t*
     } catch (...) {
         return AIBS_ERR_INTERNAL;
     }
+}
+
+}  // namespace aibs
+
+int32_t aibs_ai_run(aibs_ai_session* session, const float* input, const int64_t* shape, size_t rank,
+                    float** output, int64_t* out_shape, size_t* out_rank) {
+    if (output != nullptr) {
+        *output = nullptr;
+    }
+    if (output == nullptr || out_shape == nullptr || out_rank == nullptr) {
+        return AIBS_ERR_INVALID_ARGUMENT;
+    }
+    std::vector<aibs::NamedTensor> outputs;
+    const int32_t status = aibs::run_all_outputs(session, input, shape, rank, outputs);
+    if (status != AIBS_OK) {
+        return status;
+    }
+    // The single-output API returns the first output.
+    const aibs::NamedTensor& first = outputs.at(0);
+    if (first.shape.size() > 8) {
+        return AIBS_ERR_INFERENCE_FAILED;
+    }
+    float* buffer = static_cast<float*>(std::malloc(std::max<size_t>(first.data.size(), 1) * sizeof(float)));
+    if (buffer == nullptr) {
+        return AIBS_ERR_OUT_OF_MEMORY;
+    }
+    std::memcpy(buffer, first.data.data(), first.data.size() * sizeof(float));
+    for (size_t d = 0; d < first.shape.size(); ++d) {
+        out_shape[d] = first.shape[d];
+    }
+    *out_rank = first.shape.size();
+    *output = buffer;
+    return AIBS_OK;
 }
 
 void aibs_ai_free(float* data) {

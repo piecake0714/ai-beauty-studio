@@ -12,6 +12,8 @@ function EditToolbar() {
   const splitView = useApp((s) => s.splitView);
   const setSplitView = useApp((s) => s.setSplitView);
   const setHoldOriginal = useApp((s) => s.setHoldOriginal);
+  const autoEnhance = useApp((s) => s.autoEnhance);
+  const enhancing = useApp((s) => s.enhancing);
 
   return (
     <div className="edit-toolbar" role="toolbar" aria-label={t("nav.editor")}>
@@ -20,6 +22,9 @@ function EditToolbar() {
       </button>
       <button type="button" className="ghost small" onClick={() => void redo()} disabled={!canRedo} title={`${t("edit.redo")} (Ctrl+Y)`}>
         ↷ {t("edit.redo")}
+      </button>
+      <button type="button" className="ghost small" onClick={() => void autoEnhance()} disabled={enhancing} title={t("edit.enhanceHint")}>
+        ✦ {enhancing ? t("edit.enhancing") : t("edit.enhance")}
       </button>
       <div className="spacer" />
       <button

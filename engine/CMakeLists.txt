@@ -39,6 +39,10 @@ add_library(aibs_engine SHARED
     color-engine/src/adjust.cpp
     gpu-engine/src/gpu.cpp
     ai-runtime/src/session.cpp
+    portrait-engine/src/yunet_decode.cpp
+    portrait-engine/src/detect.cpp
+    portrait-engine/src/retouch.cpp
+    portrait-engine/src/auto_adjust.cpp
 )
 target_include_directories(aibs_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_definitions(aibs_engine PRIVATE AIBS_BUILD)
@@ -64,9 +68,13 @@ install(FILES ${AIBS_RUNTIME_DLLS} DESTINATION bin)
 
 include(CTest)
 if(BUILD_TESTING)
-    add_executable(aibs_engine_tests tests/decode_test.cpp tests/source_test.cpp tests/adjust_test.cpp tests/ai_test.cpp tests/main.cpp)
+    add_executable(aibs_engine_tests tests/decode_test.cpp tests/source_test.cpp tests/adjust_test.cpp tests/ai_test.cpp
+        tests/portrait_test.cpp tests/main.cpp
+        # Pure decoding code, tested directly with hand-made model outputs.
+        portrait-engine/src/yunet_decode.cpp)
     # The tests use OpenCV directly to build large synthetic images.
-    target_link_libraries(aibs_engine_tests PRIVATE aibs_engine opencv_core opencv_imgcodecs)
+    target_link_libraries(aibs_engine_tests PRIVATE aibs_engine opencv_core opencv_imgcodecs opencv_imgproc)
+    target_include_directories(aibs_engine_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/portrait-engine/src)
     target_compile_definitions(aibs_engine_tests PRIVATE
         AIBS_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../tests/fixtures"
         AIBS_MODEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../models/files")

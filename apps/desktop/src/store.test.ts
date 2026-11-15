@@ -20,6 +20,7 @@ function fakeApi(overrides: Partial<Api> = {}): Api {
   // Edit history like the core's: snapshots and a position.
   let states: Adjustments[] = [NO_ADJUSTMENTS];
   let index = 0;
+  let serial = 0;
   const editState = (): EditState => ({
     adjustments: states[index],
     canUndo: index > 0,
@@ -34,6 +35,7 @@ function fakeApi(overrides: Partial<Api> = {}): Api {
       settings = { ...settings, recent: [{ path, openedAt: 1 }, ...settings.recent] };
       states = [NO_ADJUSTMENTS];
       index = 0;
+      serial += 1;
       return frameBuffer(4, 3);
     }),
     renderView: vi.fn(async () => frameBuffer(4, 3)),
@@ -52,6 +54,13 @@ function fakeApi(overrides: Partial<Api> = {}): Api {
     }),
     redo: vi.fn(async () => {
       index = Math.min(states.length - 1, index + 1);
+      return editState();
+    }),
+    facesStatus: vi.fn(async () => ({ serial, status: { state: "detecting" as const } })),
+    onFaces: vi.fn(async () => () => {}),
+    autoEnhance: vi.fn(async () => {
+      states = [...states.slice(0, index + 1), { ...states[index], exposure: 0.5, vibrance: 10 }];
+      index = states.length - 1;
       return editState();
     }),
     hardwareInfo: vi.fn(async () => ({ gpus: [], runtimeVersion: "1.24.4" })),
@@ -303,5 +312,44 @@ describe("app store", () => {
     expect(api.setEditorMode).toHaveBeenCalledWith("advanced");
     expect(store.getState().settings.editorMode).toBe("advanced");
     expect(store.getState().live.vibrance).toBe(40);
+  });
+
+  it("shows face detection for the newest image only", async () => {
+    const store = createAppStore(fakeApi());
+    expect(store.getState().faces).toBeNull();
+    await store.getState().openPath("C:\\a.jpg");
+    expect(store.getState().faces).toEqual({ state: "detecting" });
+    store.getState().receiveFaces({ serial: 1, status: { state: "ready", count: 2 } });
+    expect(store.getState().faces).toEqual({ state: "ready", count: 2 });
+    // A late "detecting" reply for the same image does not undo the result.
+    store.getState().receiveFaces({ serial: 1, status: { state: "detecting" } });
+    expect(store.getState().faces).toEqual({ state: "ready", count: 2 });
+    await store.getState().openPath("C:\\b.jpg");
+    expect(store.getState().faces).toEqual({ state: "detecting" });
+    // The result for the first image arriving late is ignored.
+    store.getState().receiveFaces({ serial: 1, status: { state: "ready", count: 5 } });
+    expect(store.getState().faces).toEqual({ state: "detecting" });
+    store.getState().receiveFaces({ serial: 2, status: { state: "ready", count: 0 } });
+    expect(store.getState().faces).toEqual({ state: "ready", count: 0 });
+  });
+
+  it("applies one-click enhancement as one undoable step", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    await store.getState().openPath("C:\\a.jpg");
+    await store.getState().autoEnhance();
+    expect(api.autoEnhance).toHaveBeenCalledTimes(1);
+    expect(store.getState().live.exposure).toBe(0.5);
+    expect(store.getState().edit?.canUndo).toBe(true);
+    expect(store.getState().enhancing).toBe(false);
+    await store.getState().undo();
+    expect(store.getState().live).toEqual(NO_ADJUSTMENTS);
+  });
+
+  it("does not enhance without an open image", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    await store.getState().autoEnhance();
+    expect(api.autoEnhance).not.toHaveBeenCalled();
   });
 });

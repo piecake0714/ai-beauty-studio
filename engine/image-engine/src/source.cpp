@@ -1,5 +1,7 @@
 #include "aibs/engine.h"
 #include "../../color-engine/src/adjust.h"
+#include "../../portrait-engine/src/portrait.h"
+#include "source_internal.h"
 
 #include <algorithm>
 #include <climits>
@@ -23,11 +25,6 @@ constexpr uint32_t kMaxOutputSide = 16384;
 
 }  // namespace
 
-struct aibs_source {
-    // levels[0] is the full-resolution image (8-bit BGR); each following
-    // level is half the size of the previous one.
-    std::vector<cv::Mat> levels;
-};
 
 int32_t aibs_source_open(const uint8_t* bytes, size_t len, aibs_source** out) {
     if (out == nullptr) {
@@ -77,6 +74,7 @@ void aibs_source_size(const aibs_source* source, uint32_t* width, uint32_t* heig
 int32_t aibs_source_render(const aibs_source* source,
                            double x, double y, double w, double h,
                            uint32_t out_width, uint32_t out_height,
+                           const aibs_portrait* portrait,
                            const aibs_adjustments* adjustments,
                            uint32_t original_columns,
                            aibs_image* out) {
@@ -126,6 +124,12 @@ int32_t aibs_source_render(const aibs_source* source,
         cv::warpAffine(level, bgr, inverse, cv::Size(static_cast<int>(out_width), static_cast<int>(out_height)),
                        (enlarging ? cv::INTER_NEAREST : cv::INTER_LINEAR) | cv::WARP_INVERSE_MAP,
                        cv::BORDER_REPLICATE);
+
+        // Retouch skin first, then adjust; both only right of the
+        // before/after split.
+        if (portrait != nullptr && original_columns < out_width) {
+            aibs::retouch_faces(bgr, static_cast<int>(original_columns), x, y, scale_x, scale_y, *portrait);
+        }
 
         // Adjust everything right of the before/after split, rows in parallel.
         if (adjustments != nullptr && original_columns < out_width) {

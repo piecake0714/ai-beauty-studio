@@ -96,6 +96,28 @@ AIBS_API int32_t aibs_adjust_rgb8(const aibs_adjustments* adjustments,
                                   const uint8_t* in, uint8_t* out, size_t pixel_count);
 
 /*
+ * A detected face, in source pixel coordinates. Landmarks are, in order:
+ * right eye, left eye, nose tip, right mouth corner, left mouth corner
+ * (as seen in the image: "right eye" is the person's right, usually on the
+ * image's left), each as x, y.
+ */
+typedef struct aibs_face {
+    float x, y, width, height;
+    float landmarks[10];
+    float score;          /* 0..1 */
+    /* This face's skin colour, measured in YCbCr on the cheeks:
+     * mean Cb, mean Cr, variance Cb, variance Cr, covariance. */
+    float skin[5];
+} aibs_face;
+
+/* Portrait retouching applied while rendering. */
+typedef struct aibs_portrait {
+    const aibs_face* faces;
+    uint32_t face_count;
+    float smoothing;      /* 0 (off) to 100 */
+} aibs_portrait;
+
+/*
  * A decoded image kept at full resolution inside the engine, with a
  * precomputed pyramid of smaller copies so any region can be shown quickly
  * at any zoom. Read-only once opened: several threads may render from the
@@ -117,13 +139,15 @@ AIBS_API void aibs_source_size(const aibs_source* source, uint32_t* width, uint3
  * alpha 0. Enlarging uses nearest-neighbour so individual pixels stay
  * visible; reducing uses the pyramid and bilinear filtering.
  *
- * adjustments may be NULL (no adjustment). The leftmost original_columns
- * output columns are left unadjusted, for a before/after split view; 0
- * adjusts everything, out_width or more shows the original only.
+ * portrait (may be NULL) retouches skin first; adjustments (may be NULL)
+ * follow. The leftmost original_columns output columns get neither, for a
+ * before/after split view; 0 changes everything, out_width or more shows
+ * the original only.
  */
 AIBS_API int32_t aibs_source_render(const aibs_source* source,
                                     double x, double y, double w, double h,
                                     uint32_t out_width, uint32_t out_height,
+                                    const aibs_portrait* portrait,
                                     const aibs_adjustments* adjustments,
                                     uint32_t original_columns,
                                     aibs_image* out);
@@ -186,6 +210,32 @@ AIBS_API int32_t aibs_ai_run(aibs_ai_session* session,
 
 AIBS_API void aibs_ai_free(float* data);
 AIBS_API void aibs_ai_close(aibs_ai_session* session);
+
+/* ---------------------------------------------------------------------
+ * Portrait
+ * ------------------------------------------------------------------- */
+
+/*
+ * Find faces with a YuNet face-detection session (opened from the
+ * registry's verified model). Faces scoring below min_score are dropped.
+ * Fills up to `capacity` faces, most confident first, sets *count to how
+ * many were found, and measures each face's skin colour.
+ */
+AIBS_API int32_t aibs_detect_faces(const aibs_source* source, aibs_ai_session* detector,
+                                   float min_score, aibs_face* out, uint32_t capacity,
+                                   uint32_t* count);
+
+/* Measure a face's skin colour (fills face->skin) from the source. */
+AIBS_API int32_t aibs_measure_skin(const aibs_source* source, aibs_face* face);
+
+/*
+ * Suggest adjustments for the whole image: exposure, contrast, tone, white
+ * balance and vibrance from its brightness and colour statistics. With
+ * faces, exposure aims at well-lit skin. *out is overwritten; HSL fields
+ * are set to zero.
+ */
+AIBS_API int32_t aibs_auto_adjust(const aibs_source* source, const aibs_face* faces,
+                                  uint32_t face_count, aibs_adjustments* out);
 
 #ifdef __cplusplus
 }

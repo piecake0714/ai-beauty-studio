@@ -7,9 +7,48 @@
       "file": "files/test-luma-v1.onnx",
       "sha256": "11e654ce49cf3554c232a2846a076884794e0375414bdd7781c4d3124ebd94fa",
       "purpose": "Self-test of the AI runtime: Rec. 709 luma of an RGB image",
-      "input": { "name": "image", "shape": [1, 3, -1, -1] },
-      "output": { "name": "luma", "shape": [1, 1, -1, -1] },
+      "input": {
+        "name": "image",
+        "shape": [
+          1,
+          3,
+          -1,
+          -1
+        ]
+      },
+      "output": {
+        "name": "luma",
+        "shape": [
+          1,
+          1,
+          -1,
+          -1
+        ]
+      },
       "license": "licenses/test-luma.json"
+    },
+    {
+      "id": "face-yunet",
+      "version": "2023mar",
+      "file": "files/face_detection_yunet_2023mar.onnx",
+      "sha256": "unpinned",
+      "purpose": "Face detection with five landmarks (YuNet, OpenCV Zoo)",
+      "input": {
+        "name": "input",
+        "shape": [
+          1,
+          3,
+          640,
+          640
+        ]
+      },
+      "output": {
+        "name": "cls_8, obj_8, bbox_8, kps_8 and the same for strides 16 and 32",
+        "shape": []
+      },
+      "license": "licenses/face-yunet.json",
+      "url": "https://huggingface.co/opencv/opencv_zoo/resolve/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+      "licenseUrl": "https://huggingface.co/opencv/opencv_zoo/resolve/main/models/face_detection_yunet/LICENSE"
     }
   ]
 }

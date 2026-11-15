@@ -39,3 +39,4 @@ void run_decode_tests();
 void run_source_tests();
 void run_adjust_tests();
 void run_ai_tests();
+void run_portrait_tests();

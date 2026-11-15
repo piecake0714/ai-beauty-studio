@@ -6,6 +6,8 @@ import {
   type Adjustments,
   type EditorMode,
   type EditState,
+  type FaceStatus,
+  type FacesReport,
   type FileInfo,
   type LanguagePreference,
   type Settings,
@@ -71,6 +73,12 @@ export interface AppState {
   split: number;
   /** Show the original while a key or button is held. */
   holdOriginal: boolean;
+  /** Face detection for the open image; null when no image is open. */
+  faces: FaceStatus | null;
+  /** Core serial of the image `faces` belongs to. */
+  facesSerial: number;
+  /** One-click enhancement is running. */
+  enhancing: boolean;
 
   init(): Promise<void>;
   /** Open an image. With `discard`, asks first when adjustments would be lost. */
@@ -106,6 +114,10 @@ export interface AppState {
   setSplitView(on: boolean): void;
   setSplit(fraction: number): void;
   setHoldOriginal(on: boolean): void;
+  /** Adopt a face detection report from the core (newer images win). */
+  receiveFaces(report: FacesReport): void;
+  /** One-click enhancement as one undoable step. */
+  autoEnhance(): Promise<void>;
   /** Output columns to leave unadjusted for a render `outWidth` wide. */
   originalColumns(outWidth: number): number;
 }
@@ -195,6 +207,7 @@ export function createAppStore(api: Api) {
             live: edit.adjustments,
             holdOriginal: false,
           });
+          get().receiveFaces(await api.facesStatus().catch(() => ({ serial: get().facesSerial + 1, status: { state: "unavailable" as const, code: "internal" } })));
         } catch (reason) {
           set({ error: errorCode(reason) });
         } finally {
@@ -305,6 +318,30 @@ export function createAppStore(api: Api) {
       setSplitView: (on) => set({ splitView: on }),
       setSplit: (fraction) => set({ split: Math.min(1, Math.max(0, fraction)) }),
       setHoldOriginal: (on) => set({ holdOriginal: on }),
+
+      faces: null,
+      facesSerial: 0,
+      enhancing: false,
+
+      receiveFaces(report) {
+        const { facesSerial, faces } = get();
+        // A report for a newer image always wins; for the same image, only
+        // the move from "detecting" to a result counts (a status reply can
+        // arrive after the result event).
+        if (report.serial > facesSerial || (report.serial === facesSerial && faces?.state === "detecting")) {
+          set({ faces: report.status, facesSerial: report.serial });
+        }
+      },
+
+      async autoEnhance() {
+        if (!get().document || get().enhancing) return;
+        set({ enhancing: true });
+        try {
+          await adoptEdit(() => api.autoEnhance());
+        } finally {
+          set({ enhancing: false });
+        }
+      },
 
       originalColumns(outWidth) {
         const { holdOriginal, splitView, split } = get();

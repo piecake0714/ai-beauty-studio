@@ -55,6 +55,8 @@ export interface Adjustments {
   hslHue: number[];
   hslSaturation: number[];
   hslLuminance: number[];
+  /** Portrait skin smoothing on detected faces, 0 (off) to 100. */
+  skinSmoothing: number;
 }
 
 export type ScalarAdjustment = Exclude<keyof Adjustments, "hslHue" | "hslSaturation" | "hslLuminance">;
@@ -75,7 +77,21 @@ export const NO_ADJUSTMENTS: Adjustments = Object.freeze({
   hslHue: Object.freeze(new Array(HSL_BANDS).fill(0)) as number[],
   hslSaturation: Object.freeze(new Array(HSL_BANDS).fill(0)) as number[],
   hslLuminance: Object.freeze(new Array(HSL_BANDS).fill(0)) as number[],
+  skinSmoothing: 0,
 }) as Adjustments;
+
+/** Face detection for the open image. */
+export type FaceStatus =
+  | { state: "detecting" }
+  | { state: "ready"; count: number }
+  /** Detection could not run; `code` is an error code. */
+  | { state: "unavailable"; code: string };
+
+/** Face status of the image opened as number `serial` in the core. */
+export interface FacesReport {
+  serial: number;
+  status: FaceStatus;
+}
 
 export interface EditState {
   adjustments: Adjustments;

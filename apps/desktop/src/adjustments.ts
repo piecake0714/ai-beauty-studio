@@ -1,10 +1,11 @@
 import { HSL_BANDS, NO_ADJUSTMENTS, type Adjustments, type BandAdjustment, type ScalarAdjustment } from "./types";
 
 /** Adjustments shown in beginner mode. */
-export const BEGINNER: ScalarAdjustment[] = ["exposure", "contrast", "highlights", "shadows", "temperature", "saturation"];
+export const BEGINNER: ScalarAdjustment[] = ["exposure", "contrast", "highlights", "shadows", "temperature", "saturation", "skinSmoothing"];
 
 export const LIGHT: ScalarAdjustment[] = ["exposure", "contrast", "highlights", "shadows", "whites", "blacks", "brightness"];
 export const COLOUR: ScalarAdjustment[] = ["temperature", "tint", "vibrance", "saturation"];
+export const PORTRAIT: ScalarAdjustment[] = ["skinSmoothing"];
 export const BANDS: BandAdjustment[] = ["hslHue", "hslSaturation", "hslLuminance"];
 
 /** A copy with one value changed. */
@@ -24,7 +25,7 @@ export function isIdentity(adjustments: Adjustments): boolean {
 }
 
 export function sameAdjustments(a: Adjustments, b: Adjustments): boolean {
-  const scalars = [...LIGHT, ...COLOUR];
+  const scalars = [...LIGHT, ...COLOUR, ...PORTRAIT];
   if (scalars.some((key) => a[key] !== b[key])) return false;
   return BANDS.every((key) => {
     for (let i = 0; i < HSL_BANDS; i++) if ((a[key][i] ?? 0) !== (b[key][i] ?? 0)) return false;
@@ -34,11 +35,11 @@ export function sameAdjustments(a: Adjustments, b: Adjustments): boolean {
 
 /** True when an adjustment not shown in beginner mode is not zero. */
 export function hasHiddenInBeginner(adjustments: Adjustments): boolean {
-  const hiddenScalars = [...LIGHT, ...COLOUR].filter((key) => !BEGINNER.includes(key));
+  const hiddenScalars = [...LIGHT, ...COLOUR, ...PORTRAIT].filter((key) => !BEGINNER.includes(key));
   return hiddenScalars.some((key) => adjustments[key] !== 0) || BANDS.some((key) => adjustments[key].some((v) => v !== 0));
 }
 
 /** Stable text key of adjustments, for detecting what a render was made with. */
 export function adjustmentsKey(adjustments: Adjustments): string {
-  return JSON.stringify([...LIGHT, ...COLOUR].map((key) => adjustments[key]).concat(...BANDS.map((key) => adjustments[key])));
+  return JSON.stringify([...LIGHT, ...COLOUR, ...PORTRAIT].map((key) => adjustments[key]).concat(...BANDS.map((key) => adjustments[key])));
 }

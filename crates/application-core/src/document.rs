@@ -15,7 +15,9 @@ pub use engine_sys::HSL_BANDS;
 /// Light and colour adjustments. All zero leaves the image unchanged.
 /// Exposure is in stops (EV), -5 to +5; every other value is -100 to +100.
 /// HSL arrays are per colour band: red, orange, yellow, green, aqua, blue,
-/// purple, magenta. Missing fields read as zero, so older saved data loads.
+/// purple, magenta. `skin_smoothing` is portrait retouching, 0 to 100,
+/// applied to detected faces before the colour adjustments. Missing fields
+/// read as zero, so older saved data loads.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Adjustments {
@@ -33,6 +35,7 @@ pub struct Adjustments {
     pub hsl_hue: [f32; HSL_BANDS],
     pub hsl_saturation: [f32; HSL_BANDS],
     pub hsl_luminance: [f32; HSL_BANDS],
+    pub skin_smoothing: f32,
 }
 
 fn fix(value: f32, limit: f32) -> f32 {
@@ -62,6 +65,7 @@ impl Adjustments {
             hsl_hue: self.hsl_hue.map(|v| fix(v, 100.0)),
             hsl_saturation: self.hsl_saturation.map(|v| fix(v, 100.0)),
             hsl_luminance: self.hsl_luminance.map(|v| fix(v, 100.0)),
+            skin_smoothing: fix(self.skin_smoothing, 100.0).max(0.0),
         }
     }
 
@@ -69,6 +73,8 @@ impl Adjustments {
         *self == Adjustments::default()
     }
 
+    /// The colour part, for the engine's colour pipeline (portrait
+    /// retouching is passed separately, see [`Adjustments::skin_smoothing`]).
     pub fn to_engine(self) -> engine_sys::Adjustments {
         let a = self.clamped();
         engine_sys::Adjustments {
@@ -87,6 +93,29 @@ impl Adjustments {
             hsl_saturation: a.hsl_saturation,
             hsl_luminance: a.hsl_luminance,
         }
+    }
+
+    /// These adjustments with the colour values replaced by `suggested`
+    /// (from one-click enhancement); retouching is kept.
+    pub fn with_colour(self, suggested: engine_sys::Adjustments) -> Adjustments {
+        Adjustments {
+            exposure: suggested.exposure,
+            brightness: suggested.brightness,
+            contrast: suggested.contrast,
+            highlights: suggested.highlights,
+            shadows: suggested.shadows,
+            whites: suggested.whites,
+            blacks: suggested.blacks,
+            temperature: suggested.temperature,
+            tint: suggested.tint,
+            vibrance: suggested.vibrance,
+            saturation: suggested.saturation,
+            hsl_hue: suggested.hsl_hue,
+            hsl_saturation: suggested.hsl_saturation,
+            hsl_luminance: suggested.hsl_luminance,
+            skin_smoothing: self.skin_smoothing,
+        }
+        .clamped()
     }
 }
 
@@ -273,12 +302,33 @@ mod tests {
         let keys: Vec<&str> = adjustments.keys().map(String::as_str).collect();
         for key in [
             "exposure", "brightness", "contrast", "highlights", "shadows", "whites", "blacks",
-            "temperature", "tint", "vibrance", "saturation", "hslHue", "hslSaturation", "hslLuminance",
+            "temperature", "tint", "vibrance", "saturation", "hslHue", "hslSaturation", "hslLuminance", "skinSmoothing",
         ] {
             assert!(keys.contains(&key), "missing {key}");
         }
         assert_eq!(adjustments["hslHue"].as_array().unwrap().len(), 8);
         assert_eq!(json["canUndo"], false);
         assert_eq!(json["edited"], false);
+    }
+
+    #[test]
+    fn skin_smoothing_is_kept_in_range_and_out_of_the_colour_pipeline() {
+        let mut a = Adjustments { skin_smoothing: 250.0, ..Default::default() };
+        assert_eq!(a.clamped().skin_smoothing, 100.0);
+        a.skin_smoothing = -5.0;
+        assert_eq!(a.clamped().skin_smoothing, 0.0);
+        a.skin_smoothing = 40.0;
+        assert!(!a.is_identity());
+        assert_eq!(a.to_engine(), engine_sys::Adjustments::default());
+    }
+
+    #[test]
+    fn one_click_values_replace_colour_but_keep_retouching() {
+        let current = Adjustments { skin_smoothing: 35.0, contrast: 80.0, ..Default::default() };
+        let suggested = engine_sys::Adjustments { exposure: 0.5, vibrance: 10.0, ..Default::default() };
+        let next = current.with_colour(suggested);
+        assert_eq!(next.skin_smoothing, 35.0);
+        assert_eq!(next.contrast, 0.0);
+        assert_eq!((next.exposure, next.vibrance), (0.5, 10.0));
     }
 }

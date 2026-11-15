@@ -55,6 +55,20 @@ export function App() {
     void init();
   }, [init]);
 
+  const receiveFaces = useApp((s) => s.receiveFaces);
+  useEffect(() => {
+    let stop: (() => void) | null = null;
+    let cancelled = false;
+    void api.onFaces(receiveFaces).then((unlisten) => {
+      if (cancelled) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      cancelled = true;
+      stop?.();
+    };
+  }, [api, receiveFaces]);
+
   useEffect(() => {
     document.documentElement.lang = language;
   }, [language]);

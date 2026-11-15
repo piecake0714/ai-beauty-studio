@@ -76,6 +76,12 @@ jobs:
             ls build/packages/ort build/packages/dml
           } 2>&1 | tee ci-logs/0b-ai-packages.txt
 
+      - name: Download third-party models
+        id: models
+        run: |
+          set -o pipefail
+          python scripts/fetch_models.py --print 2>&1 | tee ci-logs/0c-models.txt
+
       - name: Build C++ engine
         id: engine_build
         run: |
@@ -141,6 +147,7 @@ jobs:
               --extra "ONNX Runtime 1.24.4 third-party notices|build/packages/ort/ThirdPartyNotices.txt" \
               --extra "DirectML 1.15.4 (Microsoft Software License Terms)|build/packages/dml/LICENSE.txt" \
               --extra "DirectML 1.15.4 third-party notices|build/packages/dml/ThirdPartyNotices.txt" \
+              --extra "YuNet face detection model (OpenCV Zoo), MIT|models/licenses/face-yunet.LICENSE.txt" \
               --out apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.txt
           } 2>&1 | tee ci-logs/5b-notices.txt
 
@@ -195,6 +202,7 @@ jobs:
             echo "run:    $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             echo "job:    ${{ job.status }}"
             echo "ai_packages:    ${{ steps.ai_packages.outcome }}"
+            echo "models:         ${{ steps.models.outcome }}"
             echo "engine_build:   ${{ steps.engine_build.outcome }}"
             echo "engine_test:    ${{ steps.engine_test.outcome }}"
             echo "npm_install:    ${{ steps.npm_install.outcome }}"

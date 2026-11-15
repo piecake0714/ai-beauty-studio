@@ -33,4 +33,11 @@ describe("adjustment helpers", () => {
     expect(a).not.toBe(b);
     expect(adjustmentsKey(NO_ADJUSTMENTS)).toBe(adjustmentsKey({ ...NO_ADJUSTMENTS }));
   });
+
+  it("treats skin smoothing as an adjustment shown in beginner mode", () => {
+    const smoothed = withScalar(NO_ADJUSTMENTS, "skinSmoothing", 40);
+    expect(isIdentity(smoothed)).toBe(false);
+    expect(hasHiddenInBeginner(smoothed)).toBe(false);
+    expect(adjustmentsKey(smoothed)).not.toBe(adjustmentsKey(NO_ADJUSTMENTS));
+  });
 });
