@@ -1,54 +1,17 @@
-"""Collect license data for everything that ships in the application.
+"""Collect license data for the C++ packages that ship in the engine.
 
-Run by CI after a successful build. Writes tab-separated reports:
-  cargo.tsv  - Rust crates reachable from the app through normal
-               (non-dev, non-build) dependencies on Windows
-  vcpkg.tsv  - C++ packages installed by vcpkg for the engine
+Run by CI after a successful build. Writes vcpkg.tsv: one row per package
+installed by vcpkg for the engine's target triplet.
+
+Rust crates are covered by cargo-about (see about.toml), which resolves the
+features actually enabled and therefore lists exactly the crates that ship.
 
 Usage: python scripts/collect_licenses.py <output-dir>
 """
 import glob
 import json
 import os
-import subprocess
 import sys
-
-ROOT_PACKAGE = "ai-beauty-studio"
-TARGET = "x86_64-pc-windows-msvc"
-
-
-def cargo_report(path):
-    raw = subprocess.run(
-        ["cargo", "metadata", "--format-version", "1", "--filter-platform", TARGET],
-        check=True, capture_output=True, text=True, encoding="utf-8",
-    ).stdout
-    meta = json.loads(raw)
-    packages = {p["id"]: p for p in meta["packages"]}
-    nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
-    root = next(p["id"] for p in meta["packages"] if p["name"] == ROOT_PACKAGE)
-
-    shipped, stack = set(), [root]
-    while stack:
-        current = stack.pop()
-        if current in shipped:
-            continue
-        shipped.add(current)
-        for dep in nodes[current]["deps"]:
-            # kind None = normal dependency (linked into the binary)
-            if any(k.get("kind") is None for k in dep["dep_kinds"]):
-                stack.append(dep["pkg"])
-
-    rows = sorted(
-        (packages[i]["name"], packages[i]["version"],
-         packages[i].get("license") or "(none declared)",
-         packages[i].get("source") or "workspace")
-        for i in shipped
-    )
-    with open(path, "w", encoding="utf-8") as out:
-        out.write("name\tversion\tlicense\tsource\n")
-        for row in rows:
-            out.write("\t".join(row) + "\n")
-    return len(rows)
 
 
 def vcpkg_report(path):
@@ -76,7 +39,6 @@ def vcpkg_report(path):
 def main():
     out_dir = sys.argv[1]
     os.makedirs(out_dir, exist_ok=True)
-    print("cargo crates:", cargo_report(os.path.join(out_dir, "cargo.tsv")))
     print("vcpkg ports:", vcpkg_report(os.path.join(out_dir, "vcpkg.tsv")))
 
 
