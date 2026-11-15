@@ -57,6 +57,7 @@ function fakeApi(overrides: Partial<Api> = {}): Api {
       return editState();
     }),
     startBackgroundSeparation: vi.fn(async () => 7),
+    startShapeEstimation: vi.fn(async () => 8),
     addBackgroundImage: vi.fn(async () => 1),
     facesStatus: vi.fn(async () => ({ serial, status: { state: "detecting" as const } })),
     onFaces: vi.fn(async () => () => {}),
@@ -401,5 +402,30 @@ describe("app store", () => {
     expect(store.getState().live).toMatchObject({ backgroundMode: "image", backgroundImage: 1 });
     await store.getState().undo();
     expect(store.getState().live.backgroundMode).toBe("color");
+  });
+
+  it("turns a light on with defaults and starts the 3D shape analysis once", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    await store.getState().openPath("C:\\a.jpg");
+    expect(store.getState().shape).toEqual({ state: "none" });
+    await store.getState().chooseLight("softbox");
+    expect(store.getState().live).toMatchObject({ lightKind: "softbox", lightIntensity: 50, lightX: 0.3 });
+    expect(api.startShapeEstimation).toHaveBeenCalledTimes(1);
+    expect(store.getState().shape).toMatchObject({ state: "running", jobId: 8 });
+    // Shape job updates do not touch the separation state.
+    store.getState().receiveJobUpdate({ state: "finished", id: 8, result: { provider: "cpu" } });
+    expect(store.getState().shape).toEqual({ state: "ready", provider: "cpu" });
+    expect(store.getState().background).toEqual({ state: "none" });
+    // Switching kind keeps the light's position and does not analyse again.
+    store.getState().setLive({ ...store.getState().live, lightX: 0.8 });
+    await store.getState().commitLive();
+    await store.getState().chooseLight("reflector");
+    expect(store.getState().live).toMatchObject({ lightKind: "reflector", lightX: 0.8 });
+    expect(api.startShapeEstimation).toHaveBeenCalledTimes(1);
+    await store.getState().setLightSubjectOnly(true);
+    expect(store.getState().live.lightSubjectOnly).toBe(true);
+    await store.getState().undo();
+    expect(store.getState().live.lightSubjectOnly).toBe(false);
   });
 });

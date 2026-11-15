@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { BANDS, BEGINNER, COLOUR, fromHex, hasHiddenInBeginner, isIdentity, LIGHT, PORTRAIT, toHex, withBand, withScalar } from "../adjustments";
+import { BANDS, BEGINNER, COLOUR, LIGHTING, fromHex, hasHiddenInBeginner, isIdentity, LIGHT, PORTRAIT, toHex, withBand, withScalar } from "../adjustments";
 import { useApp, useAppStore, useI18n } from "../context";
 import { errorMessage, type MessageKey } from "../i18n";
-import { HSL_BANDS, type BackgroundMode, type BandAdjustment, type ScalarAdjustment } from "../types";
+import { HSL_BANDS, type BackgroundMode, type BandAdjustment, type LightKind, type ScalarAdjustment } from "../types";
 
 const signed = (digits: number) => (value: number) => {
   const text = Math.abs(value).toFixed(digits);
@@ -25,7 +25,16 @@ const RANGE: Record<ScalarAdjustment, { min: number; max: number; step: number; 
   backgroundBlur: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
   backgroundBrightness: { min: -100, max: 100, step: 1, format: signed(0) },
   backgroundSaturation: { min: -100, max: 100, step: 1, format: signed(0) },
+  backgroundEdge: { min: -100, max: 100, step: 1, format: signed(0) },
+  lightX: { min: -1, max: 2, step: 0.01, format: (v) => v.toFixed(2) },
+  lightY: { min: -1, max: 2, step: 0.01, format: (v) => v.toFixed(2) },
+  lightIntensity: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
+  lightSize: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
+  lightWarmth: { min: -100, max: 100, step: 1, format: signed(0) },
+  lightHeight: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
 };
+
+const LIGHT_KINDS: LightKind[] = ["none", "natural", "softbox", "diffuse", "reflector"];
 
 const BACKGROUND_MODES: BackgroundMode[] = ["original", "transparent", "color", "blur", "image"];
 
@@ -151,8 +160,51 @@ function SeparationStatus() {
   }
 }
 
+/** 3D shape estimation status for lighting. */
+function ShapeStatus() {
+  const { t, language } = useI18n();
+  const shape = useApp((s) => s.shape);
+  const start = useApp((s) => s.startShapeEstimation);
+  const cancel = useApp((s) => s.cancelShapeEstimation);
+  if (!shape) return null;
+  switch (shape.state) {
+    case "none":
+      return (
+        <div className="separation">
+          <p className="note">{t("light.flatNote")}</p>
+          <button type="button" className="ghost small" onClick={() => void start()}>
+            {t("light.analyse")}
+          </button>
+        </div>
+      );
+    case "running":
+      return (
+        <div className="separation" role="status">
+          <p className="note">{t("light.running", { percent: Math.round(shape.fraction * 100) })}</p>
+          <progress max={1} value={shape.fraction} />
+          <button type="button" className="ghost small" onClick={() => void cancel()} disabled={shape.cancelling}>
+            {t("ai.cancel")}
+          </button>
+        </div>
+      );
+    case "failed":
+      return (
+        <div className="separation">
+          <p className="error-text">{errorMessage(language, shape.code)}</p>
+          <button type="button" className="ghost small" onClick={() => void start()}>
+            {t("background.retry")}
+          </button>
+        </div>
+      );
+    case "ready":
+      return <p className="note">{t("light.ready")}</p>;
+  }
+}
+
 export function AdjustPanel() {
   const { t } = useI18n();
+  const chooseLight = useApp((s) => s.chooseLight);
+  const setLightSubjectOnly = useApp((s) => s.setLightSubjectOnly);
   const background = useApp((s) => s.background);
   const chooseBackground = useApp((s) => s.chooseBackground);
   const pickBackgroundImage = useApp((s) => s.pickBackgroundImage);
@@ -288,6 +340,7 @@ export function AdjustPanel() {
               </button>
             )}
             {live.backgroundMode === "transparent" && <p className="note">{t("background.transparentNote")}</p>}
+            {live.backgroundMode !== "original" && scalar("backgroundEdge")}
             {live.backgroundMode === "blur" && scalar("backgroundBlur")}
             {live.backgroundMode !== "transparent" && live.backgroundMode !== "color" && (
               <>
@@ -295,6 +348,40 @@ export function AdjustPanel() {
                 {scalar("backgroundSaturation")}
               </>
             )}
+          </>
+        )}
+      </section>
+
+      <section aria-labelledby="light-section-title">
+        <h2 id="light-section-title">{t("light.title")}</h2>
+        <div className="segmented small wrap" role="radiogroup" aria-label={t("light.title")}>
+          {LIGHT_KINDS.map((kind) => (
+            <button
+              key={kind}
+              type="button"
+              role="radio"
+              aria-checked={live.lightKind === kind}
+              className={live.lightKind === kind ? "active" : ""}
+              onClick={() => void chooseLight(kind)}
+            >
+              {t(`light.${kind}` as MessageKey)}
+            </button>
+          ))}
+        </div>
+        {live.lightKind !== "none" && (
+          <>
+            <ShapeStatus />
+            <p className="note">{t("light.dragHint")}</p>
+            {LIGHTING.map(scalar)}
+            <label className="check-row" title={background?.state === "ready" ? undefined : t("light.subjectNeedsSeparation")}>
+              <input
+                type="checkbox"
+                checked={live.lightSubjectOnly}
+                disabled={background?.state !== "ready"}
+                onChange={(event) => void setLightSubjectOnly(event.target.checked)}
+              />
+              {t("light.subjectOnly")}
+            </label>
           </>
         )}
       </section>

@@ -41,3 +41,4 @@ void run_adjust_tests();
 void run_ai_tests();
 void run_portrait_tests();
 void run_background_tests();
+void run_light_tests();

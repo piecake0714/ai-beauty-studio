@@ -1,6 +1,7 @@
 #include "aibs/engine.h"
 #include "../../color-engine/src/adjust.h"
 #include "../../background-engine/src/background.h"
+#include "../../light-engine/src/light.h"
 #include "../../portrait-engine/src/portrait.h"
 #include "source_internal.h"
 
@@ -78,6 +79,7 @@ int32_t aibs_source_render(const aibs_source* source,
                            const aibs_portrait* portrait,
                            const aibs_adjustments* adjustments,
                            const aibs_background* background,
+                           const aibs_light* light,
                            uint32_t original_columns,
                            aibs_image* out) {
     if (out == nullptr) {
@@ -129,7 +131,7 @@ int32_t aibs_source_render(const aibs_source* source,
         cv::Mat padded = aibs::warp_plane(level, fx, fy, px, py, scale_x, scale_y, cols, rows,
                                           enlarging ? cv::INTER_NEAREST : cv::INTER_LINEAR);
 
-        // Retouch skin, adjust, then composite the background; all only
+        // Retouch skin, adjust, light, then composite the background; all only
         // right of the before/after split.
         if (portrait != nullptr && original_columns < out_width) {
             aibs::retouch_faces(padded, first, px, py, scale_x, scale_y, *portrait);
@@ -144,6 +146,9 @@ int32_t aibs_source_render(const aibs_source* source,
                     }
                 });
             }
+        }
+        if (original_columns < out_width && aibs::light_active(light)) {
+            aibs::apply_light(padded, first, px, py, scale_x, scale_y, full.cols, full.rows, *light);
         }
         cv::Mat matte_alpha;
         if (composite) {

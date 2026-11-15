@@ -61,6 +61,14 @@ export function toImage(camera: Camera, viewport: Size, point: Point): Point {
   };
 }
 
+/** Viewport point showing an image point (the inverse of toImage). */
+export function toViewport(camera: Camera, viewport: Size, point: Point): Point {
+  return {
+    x: (point.x - camera.cx) * camera.zoom + viewport.width / 2,
+    y: (point.y - camera.cy) * camera.zoom + viewport.height / 2,
+  };
+}
+
 /** Change zoom keeping the image point under `anchor` (viewport pixels) fixed. */
 export function zoomAt(camera: Camera, zoom: number, anchor: Point, image: Size, viewport: Size): Camera {
   const next = clampZoom(zoom);

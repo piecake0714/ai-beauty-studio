@@ -142,8 +142,37 @@ typedef struct aibs_background {
     float blur;                /* 0..100, for AIBS_BG_BLUR */
     float brightness;          /* -100..100, background only (-1..+1 EV) */
     float saturation;          /* -100..100, background only */
+    float edge;                /* -100 (pull the edge in) .. 100 (push it out) */
     const aibs_source* image;  /* for AIBS_BG_IMAGE */
 } aibs_background;
+
+/*
+ * The 3D shape of a photo: surface directions estimated from AI depth, for
+ * lighting. Created by aibs_estimate_shape or aibs_shape_create.
+ */
+typedef struct aibs_shape aibs_shape;
+
+#define AIBS_LIGHT_NONE 0
+#define AIBS_LIGHT_NATURAL 1    /* broad, warm, like sun or a window */
+#define AIBS_LIGHT_DIFFUSE 2    /* very soft and wide, lifts shadows */
+#define AIBS_LIGHT_REFLECTOR 3  /* fill: brightens dark areas near it */
+#define AIBS_LIGHT_SOFTBOX 4    /* soft but concentrated key light */
+
+/*
+ * A light added to the photo. With a shape, surfaces facing the light get
+ * brighter and those facing away darker (shading; no cast shadows).
+ * Without one, the photo is treated as flat.
+ */
+typedef struct aibs_light {
+    uint32_t type;             /* AIBS_LIGHT_* */
+    float x, y;                /* position as a fraction of width / height */
+    float intensity;           /* 0..100 */
+    float size;                /* 0..100: how far it reaches */
+    float warmth;              /* -100 (cool) .. 100 (warm) */
+    float height;              /* 0 (grazing, from the side) .. 100 (from the camera) */
+    const aibs_matte* subject; /* if not NULL, light only the subject */
+    const aibs_shape* shape;   /* may be NULL */
+} aibs_light;
 
 /*
  * A decoded image kept at full resolution inside the engine, with a
@@ -167,10 +196,10 @@ AIBS_API void aibs_source_size(const aibs_source* source, uint32_t* width, uint3
  * visible; reducing uses the pyramid and bilinear filtering.
  *
  * portrait (may be NULL) retouches skin first; adjustments (may be NULL)
- * follow; background (may be NULL) is composited last. The leftmost
- * original_columns output columns get none of them, for a before/after
- * split view; 0 changes everything, out_width or more shows
- * the original only.
+ * follow, then light (may be NULL); background (may be NULL) is
+ * composited last. The leftmost original_columns output columns get none
+ * of them, for a before/after split view; 0 changes everything, out_width
+ * or more shows the original only.
  */
 AIBS_API int32_t aibs_source_render(const aibs_source* source,
                                     double x, double y, double w, double h,
@@ -178,6 +207,7 @@ AIBS_API int32_t aibs_source_render(const aibs_source* source,
                                     const aibs_portrait* portrait,
                                     const aibs_adjustments* adjustments,
                                     const aibs_background* background,
+                                    const aibs_light* light,
                                     uint32_t original_columns,
                                     aibs_image* out);
 
@@ -288,6 +318,26 @@ AIBS_API float aibs_matte_coverage(const aibs_matte* matte);
 
 /* Release a matte. Safe on NULL. */
 AIBS_API void aibs_matte_free(aibs_matte* matte);
+
+/* ---------------------------------------------------------------------
+ * Lighting
+ * ------------------------------------------------------------------- */
+
+/*
+ * Estimate the photo's 3D shape with a Depth Anything V2 session (input
+ * 1 x 3 x H x W normalised RGB, H and W multiples of 14 with the longer
+ * 518; output relative inverse depth, larger is closer). On success *out
+ * must be released with aibs_shape_free.
+ */
+AIBS_API int32_t aibs_estimate_shape(const aibs_source* source, aibs_ai_session* model, aibs_shape** out);
+
+/* A shape from given relative inverse depth values (width x height,
+ * larger is closer) that stretch over a source of the given size. */
+AIBS_API int32_t aibs_shape_create(const float* depth, uint32_t width, uint32_t height,
+                                   uint32_t source_width, uint32_t source_height, aibs_shape** out);
+
+/* Release a shape. Safe on NULL. */
+AIBS_API void aibs_shape_free(aibs_shape* shape);
 
 #ifdef __cplusplus
 }

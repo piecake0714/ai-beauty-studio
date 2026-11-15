@@ -17,3 +17,5 @@ models/files/face_detection_yunet_2023mar.onnx
 models/licenses/face-yunet.LICENSE.txt
 models/files/BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx
 models/licenses/background-birefnet-lite.LICENSE.txt
+models/files/depth-anything-v2-small.onnx
+models/licenses/depth-anything-v2-small.LICENSE.txt

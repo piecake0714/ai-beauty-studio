@@ -4,6 +4,7 @@
 #include "aibs/engine.h"
 #include "check.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -71,7 +72,7 @@ bool half_matte(Matte& matte) {
 }
 
 bool render(const Source& source, const aibs_background* background, Image& out, uint32_t split = 0) {
-    return aibs_source_render(source.ptr, 0, 0, kW, kH, kW, kH, nullptr, nullptr, background, split, &out.img) ==
+    return aibs_source_render(source.ptr, 0, 0, kW, kH, kW, kH, nullptr, nullptr, background, nullptr, split, &out.img) ==
            AIBS_OK;
 }
 
@@ -134,7 +135,7 @@ void test_compositing() {
         }
         // The same at 3x zoom on part of the image.
         Image zoomed;
-        CHECK(aibs_source_render(source.ptr, 50, 20, 20, 10, 60, 30, nullptr, nullptr, &bg, 0, &zoomed.img) == AIBS_OK);
+        CHECK(aibs_source_render(source.ptr, 50, 20, 20, 10, 60, 30, nullptr, nullptr, &bg, nullptr, 0, &zoomed.img) == AIBS_OK);
         if (zoomed.img.data) {
             CHECK(same_px(zoomed.px(3, 15), original.px(51, 25)));
             const uint8_t* p = zoomed.px(57, 15);
@@ -223,6 +224,60 @@ void test_compositing() {
     }
 }
 
+// Soft edges: the edge control moves them, and a replaced background does
+// not keep a fringe of the old background's colour.
+void test_soft_edges() {
+    // Coverage ramps from subject at x = 50 to background at x = 70, and
+    // the photo there is the matching mix of red subject and background.
+    std::vector<uint8_t> values(static_cast<size_t>(kW) * kH);
+    cv::Mat scene = test_scene();
+    for (int y = 0; y < kH; ++y) {
+        for (int x = 0; x < kW; ++x) {
+            const double a = std::clamp((70.0 - (x + 0.5)) / 20.0, 0.0, 1.0);
+            values[static_cast<size_t>(y) * kW + x] = static_cast<uint8_t>(a * 255.0 + 0.5);
+            const int bx = std::max(x, kW / 2);  // background pattern under the subject
+            const cv::Vec3b back = scene.at<cv::Vec3b>(y, bx);
+            const cv::Vec3b red(40, 40, 200);
+            cv::Vec3b& p = scene.at<cv::Vec3b>(y, x);
+            for (int c = 0; c < 3; ++c) p[c] = cv::saturate_cast<uint8_t>(a * red[c] + (1 - a) * back[c]);
+        }
+    }
+    Source source;
+    CHECK(open_mat(scene, source));
+    Matte matte;
+    CHECK(aibs_matte_create(values.data(), kW, kH, kW, kH, &matte.ptr) == AIBS_OK);
+    Image original;
+    CHECK(render(source, nullptr, original));
+
+    aibs_background bg{};
+    bg.matte = matte.ptr;
+    bg.mode = AIBS_BG_TRANSPARENT;
+    Image plain, pushed, pulled;
+    CHECK(render(source, &bg, plain));
+    bg.edge = 60;
+    CHECK(render(source, &bg, pushed));
+    bg.edge = -60;
+    CHECK(render(source, &bg, pulled));
+    bg.edge = 0;
+    if (plain.img.data && pushed.img.data && pulled.img.data) {
+        CHECK(pushed.px(62, 40)[3] > plain.px(62, 40)[3] + 20);
+        CHECK(pulled.px(62, 40)[3] + 20 < plain.px(62, 40)[3]);
+        CHECK(pushed.px(20, 40)[3] == 255 && pushed.px(100, 40)[3] == 0);  // ends stay
+    }
+
+    bg.mode = AIBS_BG_COLOR;
+    bg.color[0] = bg.color[1] = bg.color[2] = 255;
+    Image white;
+    CHECK(render(source, &bg, white));
+    if (white.img.data && original.img.data) {
+        // At x = 65 the photo shows background but coverage is about 1/4.
+        const int k = values[40 * kW + 65];
+        const int naive_blue = (original.px(65, 40)[2] * k + 255 * (255 - k)) / 255;
+        std::printf("info: soft edge blue at x=65: naive %d, with subject colour %d\n", naive_blue, white.px(65, 40)[2]);
+        CHECK(white.px(65, 40)[2] + 4 < naive_blue);
+    }
+}
+
 double iou(const cv::Mat& a, const cv::Mat& b) {
     cv::Mat inter, uni;
     cv::bitwise_and(a, b, inter);
@@ -270,7 +325,7 @@ void test_segmentation() {
         bg.matte = matte.ptr;
         bg.mode = AIBS_BG_TRANSPARENT;
         Image out;
-        CHECK(aibs_source_render(source.ptr, 0, 0, w, h, w, h, nullptr, nullptr, &bg, 0, &out.img) == AIBS_OK);
+        CHECK(aibs_source_render(source.ptr, 0, 0, w, h, w, h, nullptr, nullptr, &bg, nullptr, 0, &out.img) == AIBS_OK);
         if (out.img.data) {
             cv::Mat found(h, w, CV_8U);
             for (int y = 0; y < h; ++y)
@@ -291,5 +346,6 @@ void test_segmentation() {
 void run_background_tests() {
     test_matte_creation();
     test_compositing();
+    test_soft_edges();
     test_segmentation();
 }

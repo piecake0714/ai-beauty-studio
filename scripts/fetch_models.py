@@ -58,6 +58,8 @@ def main() -> int:
             text_path = MODELS / "licenses" / f"{entry['id']}.LICENSE.txt"
             text = download(upstream, text_path)
             print(f"{entry['id']}: license text {len(text)} bytes, sha256 {hashlib.sha256(text).hexdigest()}")
+            first = text.decode("utf-8", "replace").strip().splitlines()[:2]
+            print(f"{entry['id']}: license text begins: {' / '.join(line.strip() for line in first)}")
     return 1 if failures else 0
 
 

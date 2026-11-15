@@ -9,6 +9,7 @@ import {
   stepZoom,
   toImage,
   visibleRegion,
+  toViewport,
   zoomAt,
 } from "./view";
 
@@ -97,5 +98,13 @@ describe("placeFrame", () => {
     expect(placeFrame(rendered, viewport, panned, viewport)).toEqual({ x: -100, y: 0, width: 1600, height: 900 });
     const zoomed = { zoom: 2, cx: 4000, cy: 3000 };
     expect(placeFrame(rendered, viewport, zoomed, viewport)).toEqual({ x: -800, y: -450, width: 3200, height: 1800 });
+  });
+
+  it("maps image points to the viewport and back", () => {
+    const camera = { cx: 500, cy: 300, zoom: 0.5 };
+    const viewport = { width: 800, height: 600 };
+    const point = toViewport(camera, viewport, { x: 700, y: 100 });
+    expect(point).toEqual({ x: 500, y: 200 });
+    expect(toImage(camera, viewport, point)).toEqual({ x: 700, y: 100 });
   });
 });

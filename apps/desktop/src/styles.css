@@ -657,6 +657,31 @@ input:focus-visible {
   vertical-align: middle;
 }
 
+/* Lighting */
+.light-handle {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff8d6 0 35%, rgb(255 210 80 / 0.85) 36% 100%);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.5), 0 0 12px rgb(255 220 120 / 0.9);
+  cursor: grab;
+  touch-action: none;
+}
+
+.light-handle:active {
+  cursor: grabbing;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+}
+
 /* Background section */
 .segmented.wrap {
   flex-wrap: wrap;

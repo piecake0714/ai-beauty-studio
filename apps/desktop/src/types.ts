@@ -68,13 +68,38 @@ export interface Adjustments {
   backgroundSaturation: number;
   /** Number of the replacement image added to the document; 0 for none. */
   backgroundImage: number;
+  /** -100 (pull the subject's edge in) to +100 (push it out). */
+  backgroundEdge: number;
+  lightKind: LightKind;
+  /** Light position as a fraction of the image width / height. */
+  lightX: number;
+  lightY: number;
+  /** 0–100. */
+  lightIntensity: number;
+  /** 0–100: how far the light reaches. */
+  lightSize: number;
+  /** -100 (cool) to +100 (warm). */
+  lightWarmth: number;
+  /** 0 (from the side) to 100 (from the camera). */
+  lightHeight: number;
+  /** Light only the subject (needs subject/background separation). */
+  lightSubjectOnly: boolean;
 }
+
+export type LightKind = "none" | "natural" | "diffuse" | "reflector" | "softbox";
 
 export type BackgroundMode = "original" | "transparent" | "color" | "blur" | "image";
 
 export type ScalarAdjustment = Exclude<
   keyof Adjustments,
-  "hslHue" | "hslSaturation" | "hslLuminance" | "backgroundMode" | "backgroundColor" | "backgroundImage"
+  | "hslHue"
+  | "hslSaturation"
+  | "hslLuminance"
+  | "backgroundMode"
+  | "backgroundColor"
+  | "backgroundImage"
+  | "lightKind"
+  | "lightSubjectOnly"
 >;
 export type BandAdjustment = "hslHue" | "hslSaturation" | "hslLuminance";
 
@@ -100,6 +125,15 @@ export const NO_ADJUSTMENTS: Adjustments = Object.freeze({
   backgroundBrightness: 0,
   backgroundSaturation: 0,
   backgroundImage: 0,
+  backgroundEdge: 0,
+  lightKind: "none",
+  lightX: 0,
+  lightY: 0,
+  lightIntensity: 0,
+  lightSize: 0,
+  lightWarmth: 0,
+  lightHeight: 0,
+  lightSubjectOnly: false,
 }) as Adjustments;
 
 /** Face detection for the open image. */

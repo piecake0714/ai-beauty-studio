@@ -10,6 +10,7 @@ int main() {
     run_ai_tests();
     run_portrait_tests();
     run_background_tests();
+    run_light_tests();
     if (g_failures == 0) {
         std::printf("all engine tests passed (engine %s)\n", aibs_engine_version());
         return 0;

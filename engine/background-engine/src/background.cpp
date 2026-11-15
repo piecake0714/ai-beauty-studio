@@ -78,6 +78,50 @@ cv::Mat guided(const cv::Mat& g, const cv::Mat& p, int radius, double eps) {
     return box(a, radius).mul(g) + box(b, radius);
 }
 
+// Blur-fusion foreground colour estimation (Forte & Pitie, "Approximate
+// fast foreground colour estimation", ICIP 2021): at soft edges, recover the
+// subject's own colour so the old background does not show as a fringe.
+// One pass: F = blur(F a)/blur(a) + a (I - a blur(F) - (1 - a) blur(B)).
+void fusion_pass(const cv::Mat& image, cv::Mat& f, cv::Mat& b, const cv::Mat& alpha, int radius) {
+    cv::Mat alpha3;
+    cv::merge(std::vector<cv::Mat>{alpha, alpha, alpha}, alpha3);
+    const cv::Mat inverse3 = cv::Scalar::all(1.0) - alpha3;
+    const cv::Mat blurred_alpha = box(alpha3, radius);
+    cv::Mat blurred_f, blurred_b;
+    cv::divide(box(f.mul(alpha3), radius), blurred_alpha + cv::Scalar::all(1e-5), blurred_f);
+    cv::divide(box(b.mul(inverse3), radius), (cv::Scalar::all(1.0) - blurred_alpha) + cv::Scalar::all(1e-5), blurred_b);
+    const cv::Mat next = blurred_f + alpha3.mul(image - alpha3.mul(blurred_f) - inverse3.mul(blurred_b));
+    f = cv::min(cv::max(next, 0.0), 1.0);
+    b = blurred_b;
+}
+
+// Subject colours for `bgr` given coverage `m` (both the same size),
+// 8-bit BGR. `reach` is the image's longer side in these pixels.
+cv::Mat estimate_foreground(const cv::Mat& bgr, const cv::Mat& m, double reach) {
+    cv::Mat image, alpha;
+    bgr.convertTo(image, CV_32FC3, 1.0 / 255.0);
+    m.convertTo(alpha, CV_32F, 1.0 / 255.0);
+    cv::Mat f = image.clone(), b = image.clone();
+    fusion_pass(image, f, b, alpha, std::max(2, static_cast<int>(std::lround(0.045 * reach))));
+    fusion_pass(image, f, b, alpha, std::max(1, static_cast<int>(std::lround(0.003 * reach))));
+    cv::Mat out;
+    f.convertTo(out, CV_8UC3, 255.0);
+    return out;
+}
+
+// Push the soft edge of the matte out (edge > 0) or pull it in (edge < 0),
+// keeping full subject and full background as they are.
+void shift_edge(cv::Mat& m, float edge) {
+    const double e = std::clamp(static_cast<double>(edge), -100.0, 100.0) / 100.0;
+    if (e == 0.0) return;
+    const double exponent = std::pow(2.0, -1.5 * e);
+    cv::Mat table(1, 256, CV_8U);
+    for (int i = 0; i < 256; ++i) {
+        table.at<uint8_t>(i) = cv::saturate_cast<uint8_t>(std::pow(i / 255.0, exponent) * 255.0);
+    }
+    cv::LUT(m, table, m);
+}
+
 }  // namespace
 
 namespace aibs {
@@ -115,11 +159,25 @@ int32_t composite_background(cv::Mat& bgr, int first_col, double x, double y, do
     if (first_col >= bgr.cols) return AIBS_OK;
     const double fx = static_cast<double>(matte.coverage.cols) / matte.source_width;
     const double fy = static_cast<double>(matte.coverage.rows) / matte.source_height;
-    const cv::Mat m = warp_plane(matte.coverage, fx, fy, x, y, scale_x, scale_y, bgr.cols, bgr.rows, cv::INTER_LINEAR);
+    cv::Mat m = warp_plane(matte.coverage, fx, fy, x, y, scale_x, scale_y, bgr.cols, bgr.rows, cv::INTER_LINEAR);
+    shift_edge(m, background.edge);
+
+    // At soft edges, use the subject's own colour (not mixed with the old
+    // background) whenever the background is replaced or removed.
+    const cv::Rect changed(first_col, 0, bgr.cols - first_col, bgr.rows);
+    if (background.mode != AIBS_BG_ORIGINAL) {
+        cv::Mat partial;
+        cv::inRange(m(changed), cv::Scalar(1), cv::Scalar(254), partial);
+        if (cv::countNonZero(partial) > 0) {
+            const double reach = std::max(matte.source_width * scale_x, matte.source_height * scale_y);
+            const cv::Mat foreground = estimate_foreground(bgr, m, reach);
+            foreground(changed).copyTo(bgr(changed), partial);
+        }
+    }
 
     if (background.mode == AIBS_BG_TRANSPARENT) {
         alpha = cv::Mat(bgr.size(), CV_8U, cv::Scalar(255));
-        m(cv::Rect(first_col, 0, bgr.cols - first_col, bgr.rows)).copyTo(alpha(cv::Rect(first_col, 0, bgr.cols - first_col, bgr.rows)));
+        m(changed).copyTo(alpha(changed));
         return AIBS_OK;
     }
 
@@ -175,7 +233,7 @@ int32_t composite_background(cv::Mat& bgr, int first_col, double x, double y, do
             const int32_t status = aibs_source_render(
                 background.image, (x - off_x) / cover, (y - off_y) / cover, bgr.cols / scale_x / cover,
                 bgr.rows / scale_y / cover, static_cast<uint32_t>(bgr.cols), static_cast<uint32_t>(bgr.rows), nullptr,
-                nullptr, nullptr, 0, &rendered.img);
+                nullptr, nullptr, nullptr, 0, &rendered.img);
             if (status != AIBS_OK) return status;
             const cv::Mat rgba(bgr.rows, bgr.cols, CV_8UC4, rendered.img.data);
             cv::cvtColor(rgba, layer, cv::COLOR_RGBA2BGR);
@@ -252,7 +310,7 @@ int32_t aibs_segment(const aibs_source* source, aibs_ai_session* model, aibs_mat
         // The model sees the whole image stretched to 1024 x 1024.
         Image input_image;
         int32_t status = aibs_source_render(source, 0, 0, full.cols, full.rows, kModelSize, kModelSize, nullptr,
-                                            nullptr, nullptr, 0, &input_image.img);
+                                            nullptr, nullptr, nullptr, 0, &input_image.img);
         if (status != AIBS_OK) return status;
 
         // 1 x 3 x 1024 x 1024, planes R, G, B, ImageNet normalisation.
@@ -296,8 +354,19 @@ int32_t aibs_segment(const aibs_source* source, aibs_ai_session* model, aibs_mat
         cv::Mat grey;
         cv::cvtColor(level, grey, cv::COLOR_BGR2GRAY);
         grey.convertTo(grey, CV_32F, 1.0 / 255.0);
-        const int radius = std::max(2, std::max(level.cols, level.rows) / 256);
-        const cv::Mat refined = guided(grey, stretched, radius, 1e-3);
+        // Refine only the uncertain band around the edge, so the confident
+        // inside of the subject keeps the model's answer and fine detail
+        // there is not smoothed away.
+        const int radius = std::max(2, std::max(level.cols, level.rows) / 512);
+        const cv::Mat guided_result = guided(grey, stretched, radius, 1e-4);
+        cv::Mat uncertain;
+        cv::inRange(stretched, cv::Scalar(0.02), cv::Scalar(0.98), uncertain);
+        cv::dilate(uncertain, uncertain,
+                   cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(4 * radius + 1, 4 * radius + 1)));
+        cv::Mat band;
+        uncertain.convertTo(band, CV_32F, 1.0 / 255.0);
+        band = box(band, radius);
+        const cv::Mat refined = stretched + band.mul(guided_result - stretched);
 
         auto* matte = new aibs_matte();
         refined.convertTo(matte->coverage, CV_8U, 255.0);

@@ -4,7 +4,7 @@ import { useApp, useI18n } from "../context";
 import { parseFrame, type Frame } from "../frame";
 import { adjustmentsKey, sameAdjustments } from "../adjustments";
 import type { Adjustments } from "../types";
-import { placeFrame, sameCamera, visibleRegion, type Camera, type Size } from "../view";
+import { placeFrame, sameCamera, toImage, toViewport, visibleRegion, type Camera, type Size } from "../view";
 
 /** After a zoom or pan, wait this long for the movement to pause before
  * asking for a sharp render. Adjustment changes are sent at once. */
@@ -81,6 +81,9 @@ export function ImageCanvas() {
   const setRendering = useApp((s) => s.setRendering);
   const reportError = useApp((s) => s.reportError);
   const separated = useApp((s) => s.background?.state === "ready");
+  const shaped = useApp((s) => s.shape?.state === "ready");
+  const setLive = useApp((s) => s.setLive);
+  const commitLive = useApp((s) => s.commitLive);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -99,7 +102,7 @@ export function ImageCanvas() {
   const columns = viewport ? originalColumns(viewport.width) : 0;
   // Uncommitted adjustments mean a slider is being dragged.
   const draft = committed !== null && !sameAdjustments(live, committed);
-  const look = lookKey(live, columns, draft, separated);
+  const look = lookKey(live, columns, draft, separated) + (shaped ? "|shaped" : "");
   // Latest values for callbacks that outlive this render.
   const latestRef = useRef({ document, camera, viewport, live, columns, look, draft });
   latestRef.current = { document, camera, viewport, live, columns, look, draft };
@@ -298,6 +301,25 @@ export function ImageCanvas() {
     if (rect && rect.width > 0) setSplit((event.clientX - rect.left) / rect.width);
   };
 
+  // The light's dot, in CSS pixels over the canvas.
+  const ratio = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
+  const lightDot =
+    document && camera && viewport && live.lightKind !== "none"
+      ? toViewport(camera, viewport, { x: live.lightX * document.size.width, y: live.lightY * document.size.height })
+      : null;
+  const moveLightTo = (clientX: number, clientY: number) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    const { document: doc, camera: cam, viewport: view } = latestRef.current;
+    if (!rect || !doc || !cam || !view) return;
+    const point = toImage(cam, view, { x: (clientX - rect.left) * ratio, y: (clientY - rect.top) * ratio });
+    const clamp = (v: number) => Math.min(2, Math.max(-1, v));
+    setLive({ ...latestRef.current.live, lightX: clamp(point.x / doc.size.width), lightY: clamp(point.y / doc.size.height) });
+  };
+  const nudgeLight = (dx: number, dy: number) => {
+    const current = latestRef.current.live;
+    setLive({ ...current, lightX: current.lightX + dx, lightY: current.lightY + dy });
+  };
+
   return (
     <div ref={containerRef} className="image-canvas" title={t("zoom.hint")}>
       <canvas
@@ -309,6 +331,34 @@ export function ImageCanvas() {
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
       />
+      {lightDot && (
+        <div
+          className="light-handle"
+          style={{ left: `${lightDot.x / ratio}px`, top: `${lightDot.y / ratio}px` }}
+          role="slider"
+          tabIndex={0}
+          aria-label={t("light.handle")}
+          aria-valuetext={`${Math.round(live.lightX * 100)}%, ${Math.round(live.lightY * 100)}%`}
+          onPointerDown={(event) => {
+            event.stopPropagation();
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          onPointerMove={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) moveLightTo(event.clientX, event.clientY);
+          }}
+          onPointerUp={() => void commitLive()}
+          onKeyDown={(event) => {
+            const step = 0.02;
+            if (event.key === "ArrowLeft") nudgeLight(-step, 0);
+            else if (event.key === "ArrowRight") nudgeLight(step, 0);
+            else if (event.key === "ArrowUp") nudgeLight(0, -step);
+            else if (event.key === "ArrowDown") nudgeLight(0, step);
+            else return;
+            event.preventDefault();
+          }}
+          onKeyUp={() => void commitLive()}
+        />
+      )}
       {holdOriginal && <span className="compare-label single">{t("compare.before")}</span>}
       {splitView && !holdOriginal && (
         <>

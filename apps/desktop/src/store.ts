@@ -1,6 +1,6 @@
 import { createStore } from "zustand/vanilla";
 import { errorCode, type Api } from "./api";
-import { withBackground } from "./adjustments";
+import { withBackground, withLightKind } from "./adjustments";
 import type { JobUpdate } from "./jobs";
 import { parseFrame, type Frame } from "./frame";
 import {
@@ -48,6 +48,13 @@ export interface OpenDocument {
   info: FileInfo | null;
 }
 
+/** An AI analysis of the open image (subject/background, 3D shape). */
+export type AnalysisView =
+  | { state: "none" }
+  | { state: "running"; jobId: number; fraction: number; cancelling: boolean }
+  | { state: "ready"; provider: string }
+  | { state: "failed"; code: string };
+
 /** Subject/background separation for the open image. */
 export type BackgroundView =
   | { state: "none" }
@@ -90,6 +97,8 @@ export interface AppState {
   enhancing: boolean;
   /** Subject/background separation; null when no image is open. */
   background: BackgroundView | null;
+  /** 3D shape estimation for lighting; null when no image is open. */
+  shape: AnalysisView | null;
 
   init(): Promise<void>;
   /** Open an image. With `discard`, asks first when adjustments would be lost. */
@@ -137,8 +146,31 @@ export interface AppState {
   chooseBackground(change: Partial<Pick<Adjustments, "backgroundMode" | "backgroundColor" | "backgroundImage">>): Promise<void>;
   /** Pick an image file and use it as the background. */
   pickBackgroundImage(filterName: string): Promise<void>;
+  startShapeEstimation(): Promise<void>;
+  cancelShapeEstimation(): Promise<void>;
+  /** Change the kind of light as one undoable step; a light also starts
+   * the 3D shape estimation if it has not run. */
+  chooseLight(kind: Adjustments["lightKind"]): Promise<void>;
+  /** Light only the subject, or everything. */
+  setLightSubjectOnly(on: boolean): Promise<void>;
   /** Output columns to leave unadjusted for a render `outWidth` wide. */
   originalColumns(outWidth: number): number;
+}
+
+/** The state of a running analysis after a job update for it. */
+function nextAnalysis(view: AnalysisView & { state: "running" }, update: JobUpdate): AnalysisView {
+  switch (update.state) {
+    case "progress":
+      return { ...view, fraction: Math.max(view.fraction, update.fraction) };
+    case "finished": {
+      const result = update.result as { provider?: string } | null;
+      return { state: "ready", provider: result?.provider ?? "cpu" };
+    }
+    case "failed":
+      return { state: "failed", code: update.code };
+    case "cancelled":
+      return { state: "none" };
+  }
 }
 
 export const defaultSettings: Settings = { theme: "system", language: "system", editorMode: "beginner", recent: [] };
@@ -231,6 +263,7 @@ export function createAppStore(api: Api) {
             live: edit.adjustments,
             holdOriginal: false,
             background: { state: "none" },
+            shape: { state: "none" },
           });
           get().receiveFaces(await api.facesStatus().catch(() => ({ serial: get().facesSerial + 1, status: { state: "unavailable" as const, code: "internal" } })));
         } catch (reason) {
@@ -348,6 +381,42 @@ export function createAppStore(api: Api) {
       facesSerial: 0,
       enhancing: false,
       background: null,
+      shape: null,
+
+      async startShapeEstimation() {
+        const shape = get().shape;
+        if (!get().document || !shape || shape.state === "running") return;
+        try {
+          const jobId = await api.startShapeEstimation();
+          set({ shape: { state: "running", jobId, fraction: 0, cancelling: false } });
+        } catch (reason) {
+          set({ shape: { state: "failed", code: errorCode(reason) } });
+        }
+      },
+
+      async cancelShapeEstimation() {
+        const shape = get().shape;
+        if (shape?.state !== "running") return;
+        set({ shape: { ...shape, cancelling: true } });
+        await api.cancelJob(shape.jobId).catch(() => false);
+      },
+
+      async chooseLight(kind) {
+        if (!get().document) return;
+        const next = withLightKind(get().live, kind);
+        set({ live: next });
+        if (kind !== "none" && (get().shape?.state === "none" || get().shape?.state === "failed")) {
+          void get().startShapeEstimation();
+        }
+        await adoptEdit(() => api.commitAdjustments(next));
+      },
+
+      async setLightSubjectOnly(on) {
+        if (!get().document) return;
+        const next = { ...get().live, lightSubjectOnly: on };
+        set({ live: next });
+        await adoptEdit(() => api.commitAdjustments(next));
+      },
 
       async startSeparation() {
         const background = get().background;
@@ -368,6 +437,13 @@ export function createAppStore(api: Api) {
       },
 
       receiveJobUpdate(update) {
+        const shape = get().shape;
+        if (shape?.state === "running" && shape.jobId === update.id) {
+          const next = nextAnalysis(shape, update);
+          set({ shape: next });
+          if (next.state === "ready") void refreshOverview(get().live).catch(() => undefined);
+          return;
+        }
         const background = get().background;
         if (background?.state !== "running" || background.jobId !== update.id) return;
         switch (update.state) {

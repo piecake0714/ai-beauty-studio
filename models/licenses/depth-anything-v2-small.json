@@ -1,0 +1,13 @@
+{
+  "model": "depth-anything-v2-small",
+  "version": "onnx-community",
+  "source": "Depth Anything V2 Small (https://github.com/DepthAnything/Depth-Anything-V2) by Lihe Yang et al.; ONNX conversion published by onnx-community at https://huggingface.co/onnx-community/depth-anything-v2-small",
+  "license": "Apache-2.0 (the Small model only; Base/Large/Giant are CC-BY-NC-4.0 and are not used)",
+  "licenseText": "licenses/depth-anything-v2-small.LICENSE.txt (downloaded with the model by scripts/fetch_models.py)",
+  "commercialUse": true,
+  "trainingData": "595K synthetic labelled images and 62M pseudo-labelled real images per the upstream paper; dataset terms not reviewed (see models/CANDIDATES.md)",
+  "notes": "Relative depth, turned into surface directions for 3D lighting.",
+  "checkedOn": "2026-11-15",
+  "checkedBy": "Project maintainer",
+  "approved": true
+}

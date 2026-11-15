@@ -47,6 +47,7 @@ extern "C" {
         portrait: *const PortraitRaw,
         adjustments: *const Adjustments,
         background: *const BackgroundRaw,
+        light: *const LightRaw,
         original_columns: u32,
         out: *mut AibsImage,
     ) -> i32;
@@ -69,6 +70,16 @@ extern "C" {
     ) -> i32;
     fn aibs_matte_coverage(matte: *const MatteRaw) -> f32;
     fn aibs_matte_free(matte: *mut MatteRaw);
+    fn aibs_estimate_shape(source: *const AibsSourceRaw, model: *mut AiSessionRaw, out: *mut *mut ShapeRaw) -> i32;
+    fn aibs_shape_create(
+        depth: *const f32,
+        width: u32,
+        height: u32,
+        source_width: u32,
+        source_height: u32,
+        out: *mut *mut ShapeRaw,
+    ) -> i32;
+    fn aibs_shape_free(shape: *mut ShapeRaw);
     fn aibs_auto_adjust(source: *const AibsSourceRaw, faces: *const Face, face_count: u32, out: *mut Adjustments) -> i32;
     fn aibs_gpu_list(out: *mut GpuInfoRaw, capacity: u32) -> u32;
     fn aibs_ai_runtime_version() -> *const c_char;
@@ -236,6 +247,8 @@ pub struct Background<'a> {
     pub brightness: f32,
     /// -100..100, background only.
     pub saturation: f32,
+    /// -100 (pull the subject's edge in) .. 100 (push it out).
+    pub edge: f32,
     /// The replacement for [`BackgroundMode::Image`].
     pub image: Option<&'a Source>,
 }
@@ -249,6 +262,7 @@ struct BackgroundRaw {
     blur: f32,
     brightness: f32,
     saturation: f32,
+    edge: f32,
     image: *const AibsSourceRaw,
 }
 
@@ -269,7 +283,121 @@ impl Background<'_> {
             blur: self.blur,
             brightness: self.brightness,
             saturation: self.saturation,
+            edge: self.edge,
             image: self.image.map_or(std::ptr::null(), |s| s.raw as *const AibsSourceRaw),
+        }
+    }
+}
+
+#[repr(C)]
+struct ShapeRaw {
+    _private: [u8; 0],
+}
+
+/// The 3D shape of a photo (surface directions from AI depth), for
+/// lighting; made by [`Source::estimate_shape`] or [`Shape::from_depth`].
+pub struct Shape {
+    raw: *mut ShapeRaw,
+}
+
+// SAFETY: read-only after creation.
+unsafe impl Send for Shape {}
+unsafe impl Sync for Shape {}
+
+impl Shape {
+    /// A shape from relative inverse depth (larger is closer), `width` x
+    /// `height`, stretched over a source of the given size.
+    pub fn from_depth(
+        depth: &[f32],
+        width: u32,
+        height: u32,
+        source_width: u32,
+        source_height: u32,
+    ) -> Result<Shape, EngineError> {
+        if depth.len() != width as usize * height as usize {
+            return Err(EngineError::InvalidArgument);
+        }
+        let mut raw: *mut ShapeRaw = std::ptr::null_mut();
+        // SAFETY: `depth` holds width * height values; `raw` is writable.
+        status_to_result(unsafe {
+            aibs_shape_create(depth.as_ptr(), width, height, source_width, source_height, &mut raw)
+        })?;
+        Ok(Shape { raw })
+    }
+}
+
+impl Drop for Shape {
+    fn drop(&mut self) {
+        // SAFETY: `raw` came from the engine and is freed once.
+        unsafe { aibs_shape_free(self.raw) };
+    }
+}
+
+impl fmt::Debug for Shape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Shape")
+    }
+}
+
+/// Kinds of light.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LightKind {
+    Natural,
+    Diffuse,
+    Reflector,
+    Softbox,
+}
+
+/// A light added to the photo, shaded by its 3D shape when there is one.
+#[derive(Debug, Clone, Copy)]
+pub struct Light<'a> {
+    pub kind: LightKind,
+    /// Position as a fraction of the width and height.
+    pub x: f32,
+    pub y: f32,
+    /// 0..100.
+    pub intensity: f32,
+    /// 0..100: reach.
+    pub size: f32,
+    /// -100 (cool) .. 100 (warm).
+    pub warmth: f32,
+    /// 0 (from the side) .. 100 (from the camera).
+    pub height: f32,
+    /// Light only the subject.
+    pub subject: Option<&'a Matte>,
+    pub shape: Option<&'a Shape>,
+}
+
+#[repr(C)]
+struct LightRaw {
+    kind: u32,
+    x: f32,
+    y: f32,
+    intensity: f32,
+    size: f32,
+    warmth: f32,
+    height: f32,
+    subject: *const MatteRaw,
+    shape: *const ShapeRaw,
+}
+
+impl Light<'_> {
+    fn raw(&self) -> LightRaw {
+        LightRaw {
+            kind: match self.kind {
+                LightKind::Natural => 1,
+                LightKind::Diffuse => 2,
+                LightKind::Reflector => 3,
+                LightKind::Softbox => 4,
+            },
+            x: self.x,
+            y: self.y,
+            intensity: self.intensity,
+            size: self.size,
+            warmth: self.warmth,
+            height: self.height,
+            subject: self.subject.map_or(std::ptr::null(), |m| m.raw as *const MatteRaw),
+            shape: self.shape.map_or(std::ptr::null(), |s| s.raw as *const ShapeRaw),
         }
     }
 }
@@ -538,7 +666,7 @@ impl Source {
         out_width: u32,
         out_height: u32,
     ) -> Result<RgbaImage, EngineError> {
-        self.render_adjusted(x, y, w, h, out_width, out_height, None, None, None, 0)
+        self.render_adjusted(x, y, w, h, out_width, out_height, None, None, None, None, 0)
     }
 
     /// Like [`Source::render`], applying portrait retouching, then
@@ -556,8 +684,11 @@ impl Source {
         portrait: Option<Portrait<'_>>,
         adjustments: Option<&Adjustments>,
         background: Option<Background<'_>>,
+        light: Option<Light<'_>>,
         original_columns: u32,
     ) -> Result<RgbaImage, EngineError> {
+        let light_raw = light.map(|l| l.raw());
+        let light_ptr = light_raw.as_ref().map_or(std::ptr::null(), |l| l as *const LightRaw);
         let mut raw = empty_image();
         let background_raw = background.map(|b| b.raw());
         let background_ptr = background_raw.as_ref().map_or(std::ptr::null(), |b| b as *const BackgroundRaw);
@@ -582,6 +713,7 @@ impl Source {
                 portrait_ptr,
                 adjustments_ptr,
                 background_ptr,
+                light_ptr,
                 original_columns,
                 &mut raw,
             )
@@ -610,6 +742,14 @@ impl Source {
         // SAFETY: both handles are valid; `raw` is writable.
         status_to_result(unsafe { aibs_segment(self.raw, model.raw, &mut raw) })?;
         Ok(Matte { raw })
+    }
+
+    /// Estimate the photo's 3D shape with the Depth Anything session `model`.
+    pub fn estimate_shape(&self, model: &AiSession) -> Result<Shape, EngineError> {
+        let mut raw: *mut ShapeRaw = std::ptr::null_mut();
+        // SAFETY: both handles are valid; `raw` is writable.
+        status_to_result(unsafe { aibs_estimate_shape(self.raw, model.raw, &mut raw) })?;
+        Ok(Shape { raw })
     }
 
     /// Suggested adjustments for one-click enhancement.
@@ -783,14 +923,14 @@ mod tests {
         let original = source.render(0.0, 0.0, 64.0, 48.0, 64, 48).unwrap();
         let zero = Adjustments::default();
         let unchanged = source
-            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&zero), None, 0)
+            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&zero), None, None, 0)
             .unwrap();
         assert_eq!(unchanged.pixels, original.pixels);
 
         let mut look = Adjustments { exposure: -1.0, saturation: 40.0, ..Default::default() };
         look.hsl_hue[0] = 50.0;
         let split = source
-            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&look), None, 32)
+            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&look), None, None, 32)
             .unwrap();
         for col in [0usize, 31, 32, 63] {
             let p = (10 * 64 + col) * 4;
@@ -861,7 +1001,7 @@ mod tests {
         let source = Source::open(PNG).unwrap();
         let plain = source.render(0.0, 0.0, 64.0, 48.0, 64, 48).unwrap();
         let portrait = Portrait { faces: &[], smoothing: 100.0 };
-        let with = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, Some(portrait), None, None, 0).unwrap();
+        let with = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, Some(portrait), None, None, None, 0).unwrap();
         assert_eq!(plain.pixels, with.pixels);
     }
 
@@ -900,12 +1040,36 @@ mod tests {
             blur: 0.0,
             brightness: 0.0,
             saturation: 0.0,
+            edge: 0.0,
             image: None,
         };
-        let out = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, None, Some(background), 0).unwrap();
+        let out = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, None, Some(background), None, 0).unwrap();
         let at = |image: &RgbaImage, x: usize, y: usize| image.pixels[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4].to_vec();
         assert_eq!(at(&out, 5, 10), at(&plain, 5, 10));
         assert_eq!(at(&out, 60, 10), vec![1, 2, 3, 255]);
         assert_eq!(Matte::from_values(&values, 10, 10, 64, 48).unwrap_err(), EngineError::InvalidArgument);
+    }
+
+    #[test]
+    fn light_brightens_near_it_and_follows_a_shape() {
+        let source = Source::open(PNG).unwrap();
+        let plain = source.render(0.0, 0.0, 64.0, 48.0, 64, 48).unwrap();
+        let depth: Vec<f32> = (0..64 * 48).map(|i| ((i % 64) as f32 / 64.0)).collect();
+        let shape = Shape::from_depth(&depth, 64, 48, 64, 48).unwrap();
+        let light = Light {
+            kind: LightKind::Softbox,
+            x: 0.1,
+            y: 0.5,
+            intensity: 80.0,
+            size: 40.0,
+            warmth: 0.0,
+            height: 50.0,
+            subject: None,
+            shape: Some(&shape),
+        };
+        let lit = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, None, None, Some(light), 0).unwrap();
+        let green = |image: &RgbaImage, x: usize, y: usize| image.pixels[(y * 64 + x) * 4 + 1];
+        assert!(green(&lit, 6, 24) > green(&plain, 6, 24));
+        assert_eq!(Shape::from_depth(&depth, 10, 10, 64, 48).unwrap_err(), EngineError::InvalidArgument);
     }
 }

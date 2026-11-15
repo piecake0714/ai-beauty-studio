@@ -25,6 +25,18 @@ pub enum BackgroundSetting {
     Image,
 }
 
+/// The kind of added light (none by default).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LightSetting {
+    #[default]
+    None,
+    Natural,
+    Diffuse,
+    Reflector,
+    Softbox,
+}
+
 /// Light and colour adjustments. All zero leaves the image unchanged.
 /// Exposure is in stops (EV), -5 to +5; every other value is -100 to +100.
 /// HSL arrays are per colour band: red, orange, yellow, green, aqua, blue,
@@ -60,6 +72,23 @@ pub struct Adjustments {
     pub background_brightness: f32,
     pub background_saturation: f32,
     pub background_image: u32,
+    /// -100 (pull the subject's edge in) .. 100 (push it out).
+    pub background_edge: f32,
+    pub light_kind: LightSetting,
+    /// Light position as a fraction of the width and height (may lie a
+    /// little outside the photo).
+    pub light_x: f32,
+    pub light_y: f32,
+    /// 0 to 100.
+    pub light_intensity: f32,
+    /// 0 to 100: how far it reaches.
+    pub light_size: f32,
+    /// -100 (cool) to 100 (warm).
+    pub light_warmth: f32,
+    /// 0 (from the side) to 100 (from the camera).
+    pub light_height: f32,
+    /// Light only the subject (needs subject/background separation).
+    pub light_subject_only: bool,
 }
 
 fn fix(value: f32, limit: f32) -> f32 {
@@ -96,6 +125,15 @@ impl Adjustments {
             background_brightness: fix(self.background_brightness, 100.0),
             background_saturation: fix(self.background_saturation, 100.0),
             background_image: self.background_image,
+            background_edge: fix(self.background_edge, 100.0),
+            light_kind: self.light_kind,
+            light_x: fix(self.light_x, 2.0).max(-1.0),
+            light_y: fix(self.light_y, 2.0).max(-1.0),
+            light_intensity: fix(self.light_intensity, 100.0).max(0.0),
+            light_size: fix(self.light_size, 100.0).max(0.0),
+            light_warmth: fix(self.light_warmth, 100.0),
+            light_height: fix(self.light_height, 100.0).max(0.0),
+            light_subject_only: self.light_subject_only,
         }
     }
 
@@ -129,7 +167,40 @@ impl Adjustments {
             blur: a.background_blur,
             brightness: a.background_brightness,
             saturation: a.background_saturation,
+            edge: a.background_edge,
             image: if mode == Mode::Image { image } else { None },
+        })
+    }
+
+    /// The added light for the engine, with the photo's shape and subject
+    /// when known. None when there is no light.
+    pub fn light<'a>(
+        &self,
+        matte: Option<&'a engine_sys::Matte>,
+        shape: Option<&'a engine_sys::Shape>,
+    ) -> Option<engine_sys::Light<'a>> {
+        use engine_sys::LightKind as Kind;
+        let a = self.clamped();
+        let kind = match a.light_kind {
+            LightSetting::None => return None,
+            LightSetting::Natural => Kind::Natural,
+            LightSetting::Diffuse => Kind::Diffuse,
+            LightSetting::Reflector => Kind::Reflector,
+            LightSetting::Softbox => Kind::Softbox,
+        };
+        if a.light_intensity <= 0.0 {
+            return None;
+        }
+        Some(engine_sys::Light {
+            kind,
+            x: a.light_x,
+            y: a.light_y,
+            intensity: a.light_intensity,
+            size: a.light_size,
+            warmth: a.light_warmth,
+            height: a.light_height,
+            subject: if a.light_subject_only { matte } else { None },
+            shape,
         })
     }
 
@@ -364,7 +435,8 @@ mod tests {
             "exposure", "brightness", "contrast", "highlights", "shadows", "whites", "blacks",
             "temperature", "tint", "vibrance", "saturation", "hslHue", "hslSaturation", "hslLuminance", "skinSmoothing",
             "backgroundMode", "backgroundColor", "backgroundBlur", "backgroundBrightness", "backgroundSaturation",
-            "backgroundImage",
+            "backgroundImage", "backgroundEdge", "lightKind", "lightX", "lightY", "lightIntensity", "lightSize",
+            "lightWarmth", "lightHeight", "lightSubjectOnly",
         ] {
             assert!(keys.contains(&key), "missing {key}");
         }
@@ -423,5 +495,25 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(colour.background(&matte, None).unwrap().mode, engine_sys::BackgroundMode::Color([9, 8, 7]));
+    }
+
+    #[test]
+    fn light_settings_reach_the_engine_only_when_on() {
+        let off = Adjustments::default();
+        assert!(off.light(None, None).is_none());
+        let on: Adjustments = serde_json::from_str(
+            r#"{"lightKind":"softbox","lightX":0.3,"lightY":5,"lightIntensity":60,"lightSize":40,"lightHeight":50,"lightSubjectOnly":true}"#,
+        )
+        .unwrap();
+        assert!(!on.is_identity());
+        let matte = engine_sys::Matte::from_values(&[255; 4], 2, 2, 2, 2).unwrap();
+        let light = on.light(Some(&matte), None).unwrap();
+        assert_eq!(light.kind, engine_sys::LightKind::Softbox);
+        assert_eq!(light.y, 2.0); // clamped
+        assert!(light.subject.is_some());
+        let dark = Adjustments { light_intensity: 0.0, ..on };
+        assert!(dark.light(None, None).is_none());
+        // One-click enhancement keeps the light.
+        assert_eq!(on.with_colour(engine_sys::Adjustments::default()).light_kind, LightSetting::Softbox);
     }
 }

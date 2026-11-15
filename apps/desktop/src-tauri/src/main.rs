@@ -14,7 +14,7 @@ use application_core::models::Registry;
 use application_core::portrait::{self, FaceStatus};
 use application_core::info::{self, FileInfo};
 use application_core::settings::{self, EditorMode, LanguagePreference, Settings, ThemePreference};
-use application_core::{AiSession, EngineError, Face, Matte, Portrait, Source};
+use application_core::{AiSession, EngineError, Face, Matte, Portrait, Shape, Source};
 use tauri::ipc::Response;
 use tauri::path::BaseDirectory;
 use tauri::{Emitter, Manager, State};
@@ -44,6 +44,8 @@ struct OpenDocument {
     faces_status: FaceStatus,
     /// Subject/background separation, once it has been run.
     matte: Option<Arc<Matte>>,
+    /// 3D shape for lighting, once it has been estimated.
+    shape: Option<Arc<Shape>>,
     /// Replacement background images added to this document; number n in
     /// the adjustments is element n - 1.
     background_images: Vec<Arc<Source>>,
@@ -55,6 +57,7 @@ struct RenderInputs {
     source: Arc<Source>,
     faces: Arc<Vec<Face>>,
     matte: Option<Arc<Matte>>,
+    shape: Option<Arc<Shape>>,
     images: Vec<Arc<Source>>,
 }
 
@@ -64,6 +67,7 @@ impl OpenDocument {
             source: self.source.clone(),
             faces: self.faces.clone(),
             matte: self.matte.clone(),
+            shape: self.shape.clone(),
             images: self.background_images.clone(),
         }
     }
@@ -90,6 +94,7 @@ impl RenderInputs {
             .and_then(|i| self.images.get(i))
             .map(|s| s.as_ref());
         let background = self.matte.as_deref().and_then(|m| clamped.background(m, image));
+        let light = clamped.light(self.matte.as_deref(), self.shape.as_deref());
         self.source.render_adjusted(
             x,
             y,
@@ -103,6 +108,7 @@ impl RenderInputs {
             }),
             Some(&colour),
             background,
+            light,
             original_columns,
         )
     }
@@ -135,6 +141,8 @@ struct AppState {
     detector: Mutex<Option<Arc<AiSession>>>,
     /// The background separation model, loaded on first use and kept.
     background_model: Arc<ModelSlot>,
+    /// The depth model for 3D lighting, loaded on first use and kept.
+    depth_model: Arc<ModelSlot>,
 }
 
 impl AppState {
@@ -227,6 +235,7 @@ async fn open_image(path: String, app: tauri::AppHandle, state: State<'_, AppSta
         faces: Arc::new(Vec::new()),
         faces_status: FaceStatus::Detecting,
         matte: None,
+        shape: None,
         background_images: Vec::new(),
     });
     // Find faces in the background; the image is usable meanwhile.
@@ -438,12 +447,40 @@ fn start_background_separation(app: tauri::AppHandle, state: State<'_, AppState>
     }))
 }
 
+/// Estimate the 3D shape of the open image for lighting, as a background
+/// job like [`start_background_separation`]. Returns the job id.
+#[tauri::command]
+fn start_shape_estimation(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<u64, String> {
+    let (serial, source) = {
+        let document = state.document.lock().map_err(|_| "internal".to_string())?;
+        let document = document.as_ref().ok_or_else(|| "no_document".to_string())?;
+        (document.serial, document.source.clone())
+    };
+    let models_dir = state.models_dir.clone();
+    let slot = state.depth_model.clone();
+    Ok(state.jobs.start(move |ctx| {
+        let registry = Registry::load(&models_dir).map_err(|e| JobError::new(e.code(), e.to_string()))?;
+        let (shape, report) = separation::estimate_shape(&registry, &slot, &source, ctx)?;
+        let state = app.state::<AppState>();
+        let mut document = state.document.lock().map_err(|_| JobError::new("internal", "document lock"))?;
+        match document.as_mut().filter(|d| d.serial == serial) {
+            Some(document) => document.shape = Some(Arc::new(shape)),
+            None => return Err(JobError::new("cancelled", "another image was opened")),
+        }
+        let mut value = serde_json::to_value(report).map_err(|e| JobError::new("internal", e.to_string()))?;
+        value["serial"] = serde_json::json!(serial);
+        Ok(value)
+    }))
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BackgroundStatus {
     serial: u64,
     /// Subject and background have been separated.
     ready: bool,
+    /// The 3D shape has been estimated.
+    shape_ready: bool,
 }
 
 #[tauri::command]
@@ -453,6 +490,7 @@ fn background_status(state: State<'_, AppState>) -> Result<BackgroundStatus, Str
     Ok(BackgroundStatus {
         serial: document.serial,
         ready: document.matte.is_some(),
+        shape_ready: document.shape.is_some(),
     })
 }
 
@@ -570,7 +608,8 @@ fn main() {
                 models_dir,
                 document_serial: AtomicU64::new(0),
                 detector: Mutex::new(None),
-                background_model: Arc::new(ModelSlot::default()),
+                background_model: Arc::new(ModelSlot::new(separation::BACKGROUND_MODEL)),
+                depth_model: Arc::new(ModelSlot::new(separation::DEPTH_MODEL)),
             });
             Ok(())
         })
@@ -587,6 +626,7 @@ fn main() {
             faces_status,
             auto_enhance,
             start_background_separation,
+            start_shape_estimation,
             background_status,
             add_background_image,
             thumbnail,

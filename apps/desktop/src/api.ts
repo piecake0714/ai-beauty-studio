@@ -43,6 +43,8 @@ export interface Api {
   autoEnhance(): Promise<EditState>;
   /** Start separating subject and background; resolves to the job id. */
   startBackgroundSeparation(): Promise<number>;
+  /** Start estimating the 3D shape for lighting; resolves to the job id. */
+  startShapeEstimation(): Promise<number>;
   /** Open an image as a replacement background; resolves to its number. */
   addBackgroundImage(path: string): Promise<number>;
   redo(): Promise<EditState>;
@@ -104,6 +106,7 @@ export const tauriApi: Api = {
   onFaces: (handler) => listen<FacesReport>("faces", (event) => handler(event.payload)),
   autoEnhance: () => invoke("auto_enhance"),
   startBackgroundSeparation: () => invoke("start_background_separation"),
+  startShapeEstimation: () => invoke("start_shape_estimation"),
   addBackgroundImage: (path) => invoke("add_background_image", { path }),
   redo: () => invoke("redo"),
   hardwareInfo: () => invoke("hardware_info"),

@@ -158,6 +158,7 @@ jobs:
               --extra "DirectML 1.15.4 third-party notices|build/packages/dml/ThirdPartyNotices.txt" \
               --extra "YuNet face detection model (OpenCV Zoo), MIT|models/licenses/face-yunet.LICENSE.txt" \
               --extra "BiRefNet lite background model (Peng Zheng et al.), MIT|models/licenses/background-birefnet-lite.LICENSE.txt" \
+              --extra "Depth Anything V2 Small depth model (Lihe Yang et al.), Apache-2.0|models/licenses/depth-anything-v2-small.LICENSE.txt" \
               --out apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.txt
           } 2>&1 | tee ci-logs/5b-notices.txt
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adjustmentsKey, fromHex, hasHiddenInBeginner, isIdentity, sameAdjustments, toHex, withBackground, withBand, withScalar } from "./adjustments";
+import { adjustmentsKey, fromHex, hasHiddenInBeginner, isIdentity, sameAdjustments, toHex, withBackground, withBand, withLightKind, withScalar } from "./adjustments";
 import { NO_ADJUSTMENTS } from "./types";
 
 describe("adjustment helpers", () => {
@@ -54,5 +54,15 @@ describe("adjustment helpers", () => {
     expect(toHex([255, 0, 16])).toBe("#ff0010");
     expect(fromHex("#FF0010")).toEqual([255, 0, 16]);
     expect(fromHex("nonsense")).toEqual([0, 0, 0]);
+  });
+
+  it("starts a new light from the defaults and keeps a light's settings when switching kind", () => {
+    const on = withLightKind(NO_ADJUSTMENTS, "natural");
+    expect(on).toMatchObject({ lightKind: "natural", lightIntensity: 50, lightHeight: 50 });
+    expect(isIdentity(on)).toBe(false);
+    const moved = { ...on, lightX: 0.9 };
+    expect(withLightKind(moved, "softbox").lightX).toBe(0.9);
+    expect(sameAdjustments(moved, on)).toBe(false);
+    expect(withLightKind(on, "none").lightKind).toBe("none");
   });
 });

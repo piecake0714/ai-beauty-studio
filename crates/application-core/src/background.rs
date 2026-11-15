@@ -1,13 +1,14 @@
-//! Subject/background separation for background edits.
+//! AI analyses that run once per image as background jobs: separating
+//! subject and background, and estimating the 3D shape for lighting.
 //!
-//! Separation runs once per image as a background job: the model is loaded
-//! through the registry checks (preferring the GPU) and kept for later
-//! images. If the GPU fails while running it, the job retries on the CPU.
+//! Models are loaded through the registry checks (preferring the GPU) and
+//! kept for later images. If the GPU fails while running, the job retries
+//! on the CPU.
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use engine_sys::{AiSession, Matte, Provider, Source};
+use engine_sys::{AiSession, EngineError, Matte, Provider, Shape, Source};
 use serde::Serialize;
 
 use crate::jobs::{JobContext, JobError};
@@ -15,82 +16,109 @@ use crate::models::Registry;
 
 /// The subject/background separation model (BiRefNet lite).
 pub const BACKGROUND_MODEL: &str = "background-birefnet-lite";
+/// The depth model for 3D lighting (Depth Anything V2 Small).
+pub const DEPTH_MODEL: &str = "depth-anything-v2-small";
 
-/// The loaded model, shared between jobs.
-#[derive(Default)]
-pub struct ModelSlot(Mutex<Option<Arc<AiSession>>>);
+/// One loaded model, shared between jobs.
+pub struct ModelSlot {
+    id: &'static str,
+    session: Mutex<Option<Arc<AiSession>>>,
+}
 
 impl ModelSlot {
+    pub fn new(id: &'static str) -> ModelSlot {
+        ModelSlot { id, session: Mutex::new(None) }
+    }
+
     fn get(&self, registry: &Registry, provider: Provider) -> Result<Arc<AiSession>, JobError> {
-        let mut slot = self.0.lock().map_err(|_| JobError::new("internal", "model lock"))?;
+        let mut slot = self.session.lock().map_err(|_| JobError::new("internal", "model lock"))?;
         if let Some(session) = slot.as_ref() {
             if provider == Provider::DirectMl || session.provider() == Provider::Cpu {
                 return Ok(session.clone());
             }
         }
-        let (_, bytes) = registry
-            .load_model(BACKGROUND_MODEL)
-            .map_err(|e| JobError::new(e.code(), e.to_string()))?;
+        let (_, bytes) = registry.load_model(self.id).map_err(|e| JobError::new(e.code(), e.to_string()))?;
         let session = AiSession::open(&bytes, provider).map_err(|(_, note)| JobError::new("model_load_failed", note))?;
         let session = Arc::new(session);
         *slot = Some(session.clone());
         Ok(session)
     }
+
+    pub fn is_loaded(&self) -> bool {
+        self.session.lock().map(|s| s.is_some()).unwrap_or(false)
+    }
 }
 
-/// What a finished separation reports to the UI.
+/// What a finished analysis reports to the UI.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SeparationReport {
+pub struct AnalysisReport {
     /// "directml" or "cpu".
     pub provider: String,
     /// Why the GPU was not used, when it was wanted.
     pub fallback_reason: Option<String>,
-    /// Fraction of the image that is subject.
-    pub coverage: f32,
     pub ms: f64,
 }
 
-/// Separate subject and background of `source`.
-pub fn separate(
+/// Run `analyse` with the slot's model, GPU first, CPU if the GPU fails.
+fn run<T>(
     registry: &Registry,
     slot: &ModelSlot,
-    source: &Source,
     ctx: &JobContext,
-) -> Result<(Matte, SeparationReport), JobError> {
+    analyse: impl Fn(&AiSession) -> Result<T, EngineError>,
+) -> Result<(T, AnalysisReport), JobError> {
     ctx.progress(0.05, "load");
     let session = slot.get(registry, Provider::DirectMl)?;
     ctx.check()?;
     ctx.progress(0.3, "run");
     let started = Instant::now();
     let mut fallback_reason = session.fallback_reason().map(str::to_string);
-    let (matte, used) = match source.segment(&session) {
-        Ok(matte) => (matte, session.provider()),
+    let (value, used) = match analyse(&session) {
+        Ok(value) => (value, session.provider()),
         Err(error) if session.provider() == Provider::DirectMl => {
             // The GPU could not run it; the CPU can.
             ctx.check()?;
             fallback_reason = Some(format!("DirectML failed while running: {error}"));
             let cpu = slot.get(registry, Provider::Cpu)?;
-            let matte = source
-                .segment(&cpu)
-                .map_err(|e| JobError::new("inference_failed", e.to_string()))?;
-            (matte, Provider::Cpu)
+            let value = analyse(&cpu).map_err(|e| JobError::new("inference_failed", e.to_string()))?;
+            (value, Provider::Cpu)
         }
         Err(error) => return Err(JobError::new("inference_failed", error.to_string())),
     };
     ctx.check()?;
     ctx.progress(1.0, "done");
-    let report = SeparationReport {
-        provider: match used {
-            Provider::DirectMl => "directml",
-            Provider::Cpu => "cpu",
-        }
-        .to_string(),
-        fallback_reason,
-        coverage: matte.coverage(),
-        ms: started.elapsed().as_secs_f64() * 1000.0,
-    };
-    Ok((matte, report))
+    Ok((
+        value,
+        AnalysisReport {
+            provider: match used {
+                Provider::DirectMl => "directml",
+                Provider::Cpu => "cpu",
+            }
+            .to_string(),
+            fallback_reason,
+            ms: started.elapsed().as_secs_f64() * 1000.0,
+        },
+    ))
+}
+
+/// Separate subject and background of `source` (slot: [`BACKGROUND_MODEL`]).
+pub fn separate(
+    registry: &Registry,
+    slot: &ModelSlot,
+    source: &Source,
+    ctx: &JobContext,
+) -> Result<(Matte, AnalysisReport), JobError> {
+    run(registry, slot, ctx, |session| source.segment(session))
+}
+
+/// Estimate the 3D shape of `source` (slot: [`DEPTH_MODEL`]).
+pub fn estimate_shape(
+    registry: &Registry,
+    slot: &ModelSlot,
+    source: &Source,
+    ctx: &JobContext,
+) -> Result<(Shape, AnalysisReport), JobError> {
+    run(registry, slot, ctx, |session| source.estimate_shape(session))
 }
 
 #[cfg(test)]
@@ -105,7 +133,8 @@ mod tests {
     fn separation_runs_as_a_job_through_the_registry_and_reuses_the_model() {
         let png = include_bytes!("../../../tests/fixtures/gradient_64x48.png");
         let source = Arc::new(Source::open(png).unwrap());
-        let slot = Arc::new(ModelSlot::default());
+        let slot = Arc::new(ModelSlot::new(BACKGROUND_MODEL));
+        let depth_slot = Arc::new(ModelSlot::new(DEPTH_MODEL));
         let (tx, rx) = mpsc::channel();
         let tx = Mutex::new(tx);
         let jobs = Jobs::new(move |u| tx.lock().unwrap().send(u).unwrap());
@@ -114,7 +143,7 @@ mod tests {
             jobs.start(move |ctx| {
                 let registry = Registry::load(&repo_models()).map_err(|e| JobError::new(e.code(), e.to_string()))?;
                 let (matte, report) = separate(&registry, &slot, &source, ctx)?;
-                assert_eq!(matte.coverage(), report.coverage);
+                assert!((0.0..=1.0).contains(&matte.coverage()));
                 Ok(serde_json::to_value(report).unwrap())
             });
             let result = loop {
@@ -125,10 +154,25 @@ mod tests {
                     JobUpdate::Progress { .. } => {}
                 }
             };
-            let coverage = result["coverage"].as_f64().unwrap();
-            assert!((0.0..=1.0).contains(&coverage));
             assert!(["directml", "cpu"].contains(&result["provider"].as_str().unwrap()));
         }
-        assert!(slot.0.lock().unwrap().is_some());
+        assert!(slot.is_loaded());
+
+        // The depth model the same way.
+        let (source2, slot2) = (source.clone(), depth_slot.clone());
+        jobs.start(move |ctx| {
+            let registry = Registry::load(&repo_models()).map_err(|e| JobError::new(e.code(), e.to_string()))?;
+            let (_shape, report) = estimate_shape(&registry, &slot2, &source2, ctx)?;
+            Ok(serde_json::to_value(report).unwrap())
+        });
+        loop {
+            match rx.recv_timeout(Duration::from_secs(300)).unwrap() {
+                JobUpdate::Finished { .. } => break,
+                JobUpdate::Failed { code, detail, .. } => panic!("{code}: {detail}"),
+                JobUpdate::Cancelled { .. } => panic!("cancelled"),
+                JobUpdate::Progress { .. } => {}
+            }
+        }
+        assert!(depth_slot.is_loaded());
     }
 }

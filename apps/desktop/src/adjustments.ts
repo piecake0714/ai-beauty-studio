@@ -6,7 +6,8 @@ export const BEGINNER: ScalarAdjustment[] = ["exposure", "contrast", "highlights
 export const LIGHT: ScalarAdjustment[] = ["exposure", "contrast", "highlights", "shadows", "whites", "blacks", "brightness"];
 export const COLOUR: ScalarAdjustment[] = ["temperature", "tint", "vibrance", "saturation"];
 export const PORTRAIT: ScalarAdjustment[] = ["skinSmoothing"];
-export const BACKGROUND: ScalarAdjustment[] = ["backgroundBlur", "backgroundBrightness", "backgroundSaturation"];
+export const BACKGROUND: ScalarAdjustment[] = ["backgroundBlur", "backgroundBrightness", "backgroundSaturation", "backgroundEdge"];
+export const LIGHTING: ScalarAdjustment[] = ["lightIntensity", "lightSize", "lightHeight", "lightWarmth"];
 export const BANDS: BandAdjustment[] = ["hslHue", "hslSaturation", "hslLuminance"];
 
 /** A copy with one value changed. */
@@ -37,15 +38,35 @@ export function hasHiddenInBeginner(adjustments: Adjustments): boolean {
 
 /** Stable text key of adjustments, for detecting what a render was made with. */
 export function adjustmentsKey(adjustments: Adjustments): string {
-  const scalars = [...LIGHT, ...COLOUR, ...PORTRAIT, ...BACKGROUND].map((key) => adjustments[key]);
+  const scalars = [...LIGHT, ...COLOUR, ...PORTRAIT, ...BACKGROUND, ...LIGHTING].map((key) => adjustments[key]);
   const bands = BANDS.map((key) => Array.from({ length: HSL_BANDS }, (_, i) => adjustments[key][i] ?? 0));
   const background = [adjustments.backgroundMode, ...adjustments.backgroundColor, adjustments.backgroundImage];
-  return JSON.stringify([scalars, bands, background]);
+  const light = [adjustments.lightKind, adjustments.lightX, adjustments.lightY, adjustments.lightSubjectOnly];
+  return JSON.stringify([scalars, bands, background, light]);
 }
 
 /** A copy with a different background treatment. */
 export function withBackground(adjustments: Adjustments, change: Partial<Pick<Adjustments, "backgroundMode" | "backgroundColor" | "backgroundImage">>): Adjustments {
   return { ...adjustments, ...change };
+}
+
+/** Starting values when a light is first switched on. */
+export const LIGHT_DEFAULTS = {
+  lightX: 0.3,
+  lightY: 0.3,
+  lightIntensity: 50,
+  lightSize: 50,
+  lightWarmth: 0,
+  lightHeight: 50,
+} as const;
+
+/** A copy with a different light kind; turning a light on from "none"
+ * starts from the defaults. */
+export function withLightKind(adjustments: Adjustments, kind: Adjustments["lightKind"]): Adjustments {
+  if (adjustments.lightKind === "none" && kind !== "none") {
+    return { ...adjustments, ...LIGHT_DEFAULTS, lightKind: kind };
+  }
+  return { ...adjustments, lightKind: kind };
 }
 
 /** "#rrggbb" for an R, G, B triple, and back. */
