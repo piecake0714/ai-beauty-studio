@@ -509,7 +509,7 @@ void test_healing_spots() {
     const uint8_t* centre = healed.px(100, 100);
     std::printf("info: healed spot centre %d (was %d)\n", centre[1], original.px(100, 100)[1]);
     CHECK(std::abs(centre[1] - 128) < 25);
-    CHECK(std::abs(centre[2] - centre[1] - 10) < 8);  // the colour of the area around
+    CHECK(std::abs(centre[0] - centre[1] - 10) < 8);  // the colour of the area around (red +10)
     // Only inside the spot's radius.
     CHECK(same_outside(original, healed, {cv::Rect(91, 91, 19, 19)}));
     // A spot at the photo's corner takes texture from inside the photo and

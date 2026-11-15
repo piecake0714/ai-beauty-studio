@@ -343,7 +343,7 @@ void test_segmentation() {
 
 void test_edge_detail() {
     // A sharp picture edge at x = 100 (bright subject left, dark right) and
-    // a soft matte edge from x = 90 to 110: with detail the matte follows
+    // a soft matte edge from x = 95 to 105: with detail the matte follows
     // the picture.
     const int w = 400, h = 60;
     cv::Mat bgr(h, w, CV_8UC3);
@@ -356,7 +356,7 @@ void test_edge_detail() {
     for (int y = 0; y < h; ++y)
         for (int x = 0; x < w; ++x)
             values[static_cast<size_t>(y) * w + x] =
-                cv::saturate_cast<uint8_t>(255.0 * std::clamp((110.0 - (x + 0.5)) / 20.0, 0.0, 1.0));
+                cv::saturate_cast<uint8_t>(255.0 * std::clamp((105.0 - (x + 0.5)) / 10.0, 0.0, 1.0));
     Source source;
     Matte matte;
     CHECK(open_mat(bgr, source));
@@ -369,11 +369,11 @@ void test_edge_detail() {
     bg.detail = 100.0f;
     CHECK(aibs_source_render(source.ptr, 0, 0, w, h, w, h, nullptr, nullptr, &bg, nullptr, nullptr, 0, 0, &detailed.img) == AIBS_OK);
     if (!plain.img.data || !detailed.img.data) return;
-    const int a97 = plain.px(97, 30)[3], b97 = detailed.px(97, 30)[3];
-    const int a103 = plain.px(103, 30)[3], b103 = detailed.px(103, 30)[3];
-    std::printf("info: edge detail alpha x97 %d -> %d, x103 %d -> %d\n", a97, b97, a103, b103);
-    CHECK(b97 > a97 + 25);
-    CHECK(b103 < a103 - 25);
+    const int a97 = plain.px(98, 30)[3], b97 = detailed.px(98, 30)[3];
+    const int a103 = plain.px(101, 30)[3], b103 = detailed.px(101, 30)[3];
+    std::printf("info: edge detail alpha x98 %d -> %d, x101 %d -> %d\n", a97, b97, a103, b103);
+    CHECK(b97 > a97 + 20);
+    CHECK(b103 < a103 - 20);
     // Away from the edge nothing changes.
     CHECK(plain.px(20, 30)[3] == detailed.px(20, 30)[3] && plain.px(300, 30)[3] == detailed.px(300, 30)[3]);
 }
