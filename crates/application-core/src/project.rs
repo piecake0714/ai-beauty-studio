@@ -240,6 +240,11 @@ fn engine_error(what: &str) -> impl Fn(engine_sys::EngineError) -> ProjectError 
     move |e| ProjectError::Damaged(format!("{what}: {e}"))
 }
 
+/// The entry holding a patch's coverage, next to its colour entry.
+fn alpha_entry(colour: &str) -> String {
+    format!("{}-alpha.png", colour.trim_end_matches(".png"))
+}
+
 fn rgb_of(image: &RgbaImage) -> Vec<u8> {
     image.pixels.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect()
 }
@@ -291,11 +296,17 @@ pub fn save(path: &Path, snapshot: &Snapshot) -> Result<(), ProjectError> {
     let mut patch_entries = Vec::new();
     let mut patch_names = Vec::new();
     for patch in snapshot.patches {
-        let png = engine_sys::encode(&patch.rgba, patch.pixel_width, patch.pixel_height, 4, ImageFormat::Png)
-            .map_err(engine_error("patch"))?;
+        // Colour and coverage as two images (images are read back without
+        // their own transparency).
+        let rgb: Vec<u8> = patch.rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+        let alpha: Vec<u8> = patch.rgba.chunks_exact(4).map(|p| p[3]).collect();
+        let (w, h) = (patch.pixel_width, patch.pixel_height);
+        let colour = engine_sys::encode(&rgb, w, h, 3, ImageFormat::Png).map_err(engine_error("patch"))?;
+        let coverage = engine_sys::encode(&alpha, w, h, 1, ImageFormat::Png).map_err(engine_error("patch"))?;
         let name = format!("patches/{}.png", patch.id);
         patch_entries.push(PatchEntry { patch: patch.clone(), entry: name.clone() });
-        patch_names.push((name, png));
+        patch_names.push((alpha_entry(&name), coverage));
+        patch_names.push((name, colour));
     }
     let (states, index) = snapshot.history.parts();
     let file = ProjectFile {
@@ -499,12 +510,20 @@ pub fn load(path: &Path, original_override: Option<&Path>) -> Result<Loaded, Pro
         .collect();
     let mut patches = Vec::new();
     for entry in &file.patches {
-        let png = read_entry(&mut archive, &entry.entry)?;
-        let image = engine_sys::decode_rgba8(&png, 0).map_err(engine_error("patch"))?;
-        if image.width != entry.patch.pixel_width || image.height != entry.patch.pixel_height {
+        let colour = engine_sys::decode_rgba8(&read_entry(&mut archive, &entry.entry)?, 0).map_err(engine_error("patch"))?;
+        let coverage = engine_sys::decode_rgba8(&read_entry(&mut archive, &alpha_entry(&entry.entry))?, 0)
+            .map_err(engine_error("patch"))?;
+        let size = (entry.patch.pixel_width, entry.patch.pixel_height);
+        if (colour.width, colour.height) != size || (coverage.width, coverage.height) != size {
             return Err(ProjectError::Damaged(format!("patch {} has the wrong size", entry.patch.id)));
         }
-        patches.push(PatchData { rgba: image.pixels, ..entry.patch.clone() });
+        let rgba = colour
+            .pixels
+            .chunks_exact(4)
+            .zip(coverage.pixels.chunks_exact(4))
+            .flat_map(|(c, a)| [c[0], c[1], c[2], a[0]])
+            .collect();
+        patches.push(PatchData { rgba, ..entry.patch.clone() });
     }
     Ok(Loaded {
         patches,
