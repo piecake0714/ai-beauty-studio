@@ -90,15 +90,15 @@ pub fn strip_overlap(out_width: u32, out_height: u32) -> u32 {
     ((0.1 * longer).ceil() as u32).max(64)
 }
 
-/// Render an `out_width` x `out_height` image of a `width` x `height`
-/// source in horizontal strips of `strip_rows` rows (plus `overlap` rows
-/// on each side), so memory stays bounded for large exports. `render`
-/// draws a source region (x, y, w, h) at an output size; `between` runs
-/// after each strip with the fraction done and may stop the work.
+/// Render an `out_width` x `out_height` image of the source region
+/// `region` (x, y, width, height in source pixels; the whole photo or its
+/// crop) in horizontal strips of `strip_rows` rows (plus `overlap` rows on
+/// each side), so memory stays bounded for large exports. `render` draws a
+/// source region (x, y, w, h) at an output size; `between` runs after each
+/// strip with the fraction done and may stop the work.
 #[allow(clippy::too_many_arguments)]
 pub fn render_in_strips<E>(
-    width: u32,
-    height: u32,
+    region: (u32, u32, u32, u32),
     out_width: u32,
     out_height: u32,
     strip_rows: u32,
@@ -108,6 +108,7 @@ pub fn render_in_strips<E>(
 ) -> Result<RgbaImage, E> {
     let row_bytes = out_width as usize * 4;
     let mut pixels = vec![0u8; row_bytes * out_height as usize];
+    let (region_x, region_y, width, height) = region;
     let per_row = height as f64 / out_height as f64;
     let strip_rows = strip_rows.max(1);
     let mut start = 0;
@@ -118,8 +119,8 @@ pub fn render_in_strips<E>(
         // Output row i of the strip shows the same source row as output
         // row top + i of a whole render, so the strips line up exactly.
         let strip = render(
-            0.0,
-            top as f64 * per_row,
+            region_x as f64,
+            region_y as f64 + top as f64 * per_row,
             width as f64,
             (bottom - top) as f64 * per_row,
             out_width,
@@ -290,6 +291,32 @@ mod tests {
         let shape = Shape::from_depth(&depth, w, h, w, h).unwrap();
         let colour = engine_sys::Adjustments { exposure: 0.3, contrast: 20.0, vibrance: 15.0, ..Default::default() };
         let faces = [face];
+        // A soft brush stroke across the middle on a darkening layer, and
+        // a multiply image layer.
+        let darker = engine_sys::Adjustments { exposure: -0.7, saturation: 30.0, ..Default::default() };
+        let points = [20.0, 170.0, 200.0, 190.0, 400.0, 160.0];
+        let strokes = [engine_sys::Stroke { points: &points, size: 60.0, hardness: 0.3, opacity: 0.8, erase: false }];
+        let texture = scene(30, 20);
+        let layers = [
+            engine_sys::Layer {
+                content: engine_sys::LayerContent::Adjustment(&darker),
+                blend: engine_sys::BlendMode::Normal,
+                opacity: 0.9,
+                mask_base: engine_sys::MaskBase::None,
+                mask_invert: false,
+                matte: None,
+                strokes: &strokes,
+            },
+            engine_sys::Layer {
+                content: engine_sys::LayerContent::Image(&texture),
+                blend: engine_sys::BlendMode::SoftLight,
+                opacity: 0.5,
+                mask_base: engine_sys::MaskBase::Subject,
+                mask_invert: false,
+                matte: Some(&matte),
+                strokes: &[],
+            },
+        ];
         let render = |x: f64, y: f64, rw: f64, rh: f64, ow: u32, oh: u32| {
             source.render_adjusted(
                 x,
@@ -320,12 +347,13 @@ mod tests {
                     subject: None,
                     shape: Some(&shape),
                 }),
+                &layers,
                 0,
             )
         };
         let whole = render(0.0, 0.0, w as f64, h as f64, w, h).unwrap();
         let mut fractions = Vec::new();
-        let strips = render_in_strips(w, h, w, h, 50, strip_overlap(w, h), render, |f| {
+        let strips = render_in_strips((0, 0, w, h), w, h, 50, strip_overlap(w, h), render, |f| {
             fractions.push(f);
             Ok::<(), engine_sys::EngineError>(())
         })
@@ -340,7 +368,7 @@ mod tests {
         // Reduced size works the same way.
         let (rw, rh) = output_size(w, h, Some(200));
         let small_whole = render(0.0, 0.0, w as f64, h as f64, rw, rh).unwrap();
-        let small_strips = render_in_strips(w, h, rw, rh, 37, strip_overlap(rw, rh), render, |_| Ok(())).unwrap();
+        let small_strips = render_in_strips((0, 0, w, h), rw, rh, 37, strip_overlap(rw, rh), render, |_| Ok(())).unwrap();
         let worst = small_whole.pixels.iter().zip(&small_strips.pixels).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
         assert!(worst <= 1, "reduced: largest difference {worst}");
     }
@@ -350,13 +378,12 @@ mod tests {
         let source = scene(64, 200);
         let mut calls = 0;
         let result = render_in_strips(
-            64,
-            200,
+            (0, 0, 64, 200),
             64,
             200,
             20,
             8,
-            |x, y, w, h, ow, oh| source.render_adjusted(x, y, w, h, ow, oh, None, None, None, None, 0),
+            |x, y, w, h, ow, oh| source.render_adjusted(x, y, w, h, ow, oh, None, None, None, None, &[], 0),
             |_| {
                 calls += 1;
                 if calls == 3 { Err(engine_sys::EngineError::Internal) } else { Ok(()) }
@@ -386,14 +413,25 @@ mod tests {
         let (mw, mh) = (2048u32, 1536u32);
         let coverage: Vec<u8> = (0..mw * mh).map(|i| if (i % mw) > 600 && (i % mw) < 1450 { 255 } else { 0 }).collect();
         let matte = Matte::from_values(&coverage, mw, mh, w, h).unwrap();
-        let depth: Vec<f32> = (0..1024 * 768).map(|i| ((i % 1024) as f32 / 1024.0)).collect();
+        let depth: Vec<f32> = (0..1024 * 768).map(|i| (i % 1024) as f32 / 1024.0).collect();
         let shape = Shape::from_depth(&depth, 1024, 768, w, h).unwrap();
         let colour = engine_sys::Adjustments { exposure: 0.3, contrast: 20.0, ..Default::default() };
         let faces = [face];
+        let darker = engine_sys::Adjustments { exposure: -0.5, ..Default::default() };
+        let points = [500.0, 2500.0, 3500.0, 2600.0];
+        let strokes = [engine_sys::Stroke { points: &points, size: 400.0, hardness: 0.5, opacity: 1.0, erase: false }];
+        let layers = [engine_sys::Layer {
+            content: engine_sys::LayerContent::Adjustment(&darker),
+            blend: engine_sys::BlendMode::Normal,
+            opacity: 1.0,
+            mask_base: engine_sys::MaskBase::None,
+            mask_invert: false,
+            matte: None,
+            strokes: &strokes,
+        }];
         let started = std::time::Instant::now();
         let image = render_in_strips(
-            w,
-            h,
+            (0, 0, w, h),
             w,
             h,
             STRIP_ROWS,
@@ -428,6 +466,7 @@ mod tests {
                         subject: None,
                         shape: Some(&shape),
                     }),
+                    &layers,
                     0,
                 )
             },
@@ -444,5 +483,18 @@ mod tests {
             jpeg.len()
         );
         assert!(total.as_secs() < 180);
+    }
+
+    #[test]
+    fn strips_of_a_cropped_region_match_a_whole_render_of_it() {
+        let source = scene(300, 200);
+        let region = (40u32, 30u32, 200u32, 120u32);
+        let render = |x: f64, y: f64, w: f64, h: f64, ow: u32, oh: u32| {
+            source.render_adjusted(x, y, w, h, ow, oh, None, None, None, None, &[], 0)
+        };
+        let whole = render(40.0, 30.0, 200.0, 120.0, 200, 120).unwrap();
+        let strips = render_in_strips(region, 200, 120, 25, 16, render, |_| Ok::<(), engine_sys::EngineError>(())).unwrap();
+        assert_eq!(whole.pixels, strips.pixels);
+        assert_eq!((strips.width, strips.height, strips.source_width), (200, 120, 200));
     }
 }

@@ -1,6 +1,7 @@
 #include "aibs/engine.h"
 #include "../../color-engine/src/adjust.h"
 #include "../../background-engine/src/background.h"
+#include "../../layer-engine/src/layers.h"
 #include "../../light-engine/src/light.h"
 #include "../../portrait-engine/src/portrait.h"
 #include "source_internal.h"
@@ -80,6 +81,8 @@ int32_t aibs_source_render(const aibs_source* source,
                            const aibs_adjustments* adjustments,
                            const aibs_background* background,
                            const aibs_light* light,
+                           const aibs_layer* layers,
+                           uint32_t layer_count,
                            uint32_t original_columns,
                            aibs_image* out) {
     if (out == nullptr) {
@@ -154,6 +157,11 @@ int32_t aibs_source_render(const aibs_source* source,
         if (composite) {
             const int32_t status =
                 aibs::composite_background(padded, first, px, py, scale_x, scale_y, *background, matte_alpha);
+            if (status != AIBS_OK) return status;
+        }
+        if (original_columns < out_width && layers != nullptr && layer_count > 0) {
+            const int32_t status =
+                aibs::apply_layers(padded, first, px, py, scale_x, scale_y, full.cols, full.rows, layers, layer_count);
             if (status != AIBS_OK) return status;
         }
         const cv::Rect visible(pad, pad, static_cast<int>(out_width), static_cast<int>(out_height));

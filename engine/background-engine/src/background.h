@@ -5,6 +5,8 @@
 
 #include <opencv2/core.hpp>
 
+#include "../../image-engine/src/source_internal.h"
+
 struct aibs_matte {
     // Subject coverage, 8-bit, at a resolution of its own that stretches
     // over the whole source.
@@ -30,6 +32,12 @@ int background_margin(const aibs_background& background, int source_width, int s
 /// instead and the colours are kept.
 int32_t composite_background(cv::Mat& bgr, int first_col, double x, double y, double scale_x, double scale_y,
                              const aibs_background& background, cv::Mat& alpha);
+
+/// Render `image` scaled to cover a photo_width x photo_height photo
+/// (centred), for an output whose pixel (0, 0) shows photo point (x, y):
+/// 8-bit BGR, cols x rows.
+int32_t render_cover(const aibs_source& image, int photo_width, int photo_height, double x, double y,
+                     double scale_x, double scale_y, int cols, int rows, cv::Mat& out);
 
 /// Sample a plane covering the whole source (fx, fy plane pixels per
 /// source pixel) for an output whose pixel (0, 0) shows source point

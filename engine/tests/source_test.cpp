@@ -45,7 +45,7 @@ void test_render_at_100_percent_is_exact() {
     Source source;
     CHECK(open_fixture(source));
     Image out;
-    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 64, 48, nullptr, nullptr, nullptr, nullptr, 0, &out.img) == AIBS_OK);
+    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 64, 48, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &out.img) == AIBS_OK);
     CHECK(out.img.width == 64 && out.img.height == 48);
     CHECK(out.img.source_width == 64 && out.img.source_height == 48);
     bool all_exact = out.img.data != nullptr;
@@ -65,7 +65,7 @@ void test_render_at_200_percent_repeats_pixels() {
     CHECK(open_fixture(source));
     Image out;
     // 8 x 6 source pixels starting at (10, 5), shown at 2x.
-    CHECK(aibs_source_render(source.ptr, 10, 5, 8, 6, 16, 12, nullptr, nullptr, nullptr, nullptr, 0, &out.img) == AIBS_OK);
+    CHECK(aibs_source_render(source.ptr, 10, 5, 8, 6, 16, 12, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &out.img) == AIBS_OK);
     bool all_exact = out.img.data != nullptr;
     for (int row = 0; all_exact && row < 12; ++row) {
         for (int col = 0; col < 16; ++col) {
@@ -83,7 +83,7 @@ void test_area_outside_the_image_is_transparent() {
     CHECK(open_fixture(source));
     Image out;
     // Shifted 4 pixels left: the first 4 output columns are outside.
-    CHECK(aibs_source_render(source.ptr, -4, 0, 64, 48, 64, 48, nullptr, nullptr, nullptr, nullptr, 0, &out.img) == AIBS_OK);
+    CHECK(aibs_source_render(source.ptr, -4, 0, 64, 48, 64, 48, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &out.img) == AIBS_OK);
     if (out.img.data != nullptr) {
         CHECK(out.px(3, 10)[3] == 0);
         CHECK(is_fixture_pixel(out.px(4, 10), 0, 10));
@@ -91,7 +91,7 @@ void test_area_outside_the_image_is_transparent() {
     }
 
     Image away;
-    CHECK(aibs_source_render(source.ptr, 1000, 1000, 10, 10, 10, 10, nullptr, nullptr, nullptr, nullptr, 0, &away.img) == AIBS_OK);
+    CHECK(aibs_source_render(source.ptr, 1000, 1000, 10, 10, 10, 10, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &away.img) == AIBS_OK);
     bool all_clear = away.img.data != nullptr;
     for (uint32_t i = 0; all_clear && i < 100; ++i) {
         all_clear = away.img.data[i * 4 + 3] == 0;
@@ -103,7 +103,7 @@ void test_render_reduced() {
     Source source;
     CHECK(open_fixture(source));
     Image out;
-    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 16, 12, nullptr, nullptr, nullptr, nullptr, 0, &out.img) == AIBS_OK);
+    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 16, 12, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &out.img) == AIBS_OK);
     CHECK(out.img.width == 16 && out.img.height == 12);
     if (out.img.data != nullptr) {
         // Output pixel 0 samples source x = 1.5 (r = 6), pixel 3 x = 13.5 (r = 54).
@@ -117,10 +117,10 @@ void test_invalid_render_arguments() {
     Source source;
     CHECK(open_fixture(source));
     Image out;
-    CHECK(aibs_source_render(source.ptr, 0, 0, 0, 48, 10, 10, nullptr, nullptr, nullptr, nullptr, 0, &out.img) == AIBS_ERR_INVALID_ARGUMENT);
-    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 0, 10, nullptr, nullptr, nullptr, nullptr, 0, &out.img) == AIBS_ERR_INVALID_ARGUMENT);
-    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 20000, 10, nullptr, nullptr, nullptr, nullptr, 0, &out.img) == AIBS_ERR_INVALID_ARGUMENT);
-    CHECK(aibs_source_render(nullptr, 0, 0, 64, 48, 10, 10, nullptr, nullptr, nullptr, nullptr, 0, &out.img) == AIBS_ERR_INVALID_ARGUMENT);
+    CHECK(aibs_source_render(source.ptr, 0, 0, 0, 48, 10, 10, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &out.img) == AIBS_ERR_INVALID_ARGUMENT);
+    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 0, 10, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &out.img) == AIBS_ERR_INVALID_ARGUMENT);
+    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 20000, 10, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &out.img) == AIBS_ERR_INVALID_ARGUMENT);
+    CHECK(aibs_source_render(nullptr, 0, 0, 64, 48, 10, 10, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &out.img) == AIBS_ERR_INVALID_ARGUMENT);
     CHECK(out.img.data == nullptr);
 
     const std::vector<uint8_t> bad = read_fixture("corrupted.jpg");
@@ -163,7 +163,7 @@ void test_large_image() {
     for (const Case& c : cases) {
         start = std::chrono::steady_clock::now();
         Image out;
-        CHECK(aibs_source_render(source.ptr, c.x, c.y, c.rw, c.rh, c.ow, c.oh, nullptr, nullptr, nullptr, nullptr, 0, &out.img) == AIBS_OK);
+        CHECK(aibs_source_render(source.ptr, c.x, c.y, c.rw, c.rh, c.ow, c.oh, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &out.img) == AIBS_OK);
         const double render_ms = ms_since(start);
         if (out.img.data != nullptr) {
             const uint8_t* p = out.px(c.ow / 2, c.oh / 2);
@@ -191,7 +191,7 @@ void test_large_image() {
     }
     start = std::chrono::steady_clock::now();
     Image adjusted;
-    CHECK(aibs_source_render(source.ptr, 3000, 2000, 1920, 1080, 1920, 1080, nullptr, &every, nullptr, nullptr, 0, &adjusted.img) == AIBS_OK);
+    CHECK(aibs_source_render(source.ptr, 3000, 2000, 1920, 1080, 1920, 1080, nullptr, &every, nullptr, nullptr, nullptr, 0, 0, &adjusted.img) == AIBS_OK);
     std::printf("timing: render 100%% 1920x1080 with every adjustment took %.1f ms\n", ms_since(start));
     std::printf("timing: open 48 MP JPEG took %.1f ms\n", open_ms);
 }
@@ -200,11 +200,11 @@ void test_render_adjusts_right_of_the_split() {
     Source source;
     CHECK(open_fixture(source));
     Image original;
-    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 64, 48, nullptr, nullptr, nullptr, nullptr, 0, &original.img) == AIBS_OK);
+    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 64, 48, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, &original.img) == AIBS_OK);
 
     const aibs_adjustments none{};
     Image unchanged;
-    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 64, 48, nullptr, &none, nullptr, nullptr, 0, &unchanged.img) == AIBS_OK);
+    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 64, 48, nullptr, &none, nullptr, nullptr, nullptr, 0, 0, &unchanged.img) == AIBS_OK);
     bool same = original.img.data != nullptr && unchanged.img.data != nullptr;
     for (size_t i = 0; same && i < 64u * 48u * 4u; ++i) same = original.img.data[i] == unchanged.img.data[i];
     CHECK(same);
@@ -217,7 +217,7 @@ void test_render_adjusts_right_of_the_split() {
     look.saturation = 25;
     look.hsl_hue[5] = 40;
     Image split;
-    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 64, 48, nullptr, &look, nullptr, nullptr, 30, &split.img) == AIBS_OK);
+    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 64, 48, nullptr, &look, nullptr, nullptr, nullptr, 0, 30, &split.img) == AIBS_OK);
     bool correct = original.img.data != nullptr && split.img.data != nullptr;
     for (int row = 0; correct && row < 48; ++row) {
         for (int col = 0; col < 64; ++col) {
@@ -231,7 +231,7 @@ void test_render_adjusts_right_of_the_split() {
     CHECK(correct);
 
     Image all_original;
-    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 64, 48, nullptr, &look, nullptr, nullptr, 1000, &all_original.img) == AIBS_OK);
+    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 64, 48, nullptr, &look, nullptr, nullptr, nullptr, 0, 1000, &all_original.img) == AIBS_OK);
     same = original.img.data != nullptr && all_original.img.data != nullptr;
     for (size_t i = 0; same && i < 64u * 48u * 4u; ++i) same = original.img.data[i] == all_original.img.data[i];
     CHECK(same);

@@ -1,6 +1,18 @@
 import { createStore } from "zustand/vanilla";
 import { errorCode, isProjectPath, type Api } from "./api";
-import { adjustmentsKey, withBackground, withLightKind } from "./adjustments";
+import {
+  adjustmentsKey,
+  cropRect,
+  MAX_LAYERS,
+  MAX_STROKES,
+  MAX_STROKE_VALUES,
+  withBackground,
+  withLayer,
+  withLayerMoved,
+  withLightKind,
+  withNewLayer,
+  withoutLayer,
+} from "./adjustments";
 import type { JobUpdate } from "./jobs";
 import { parseFrame, type Frame } from "./frame";
 import {
@@ -8,7 +20,9 @@ import {
   type Adjustments,
   type EditorMode,
   type EditState,
+  type Crop,
   type ExportOptions,
+  type Layer,
   type FaceStatus,
   type FacesReport,
   type FileInfo,
@@ -29,6 +43,23 @@ import {
 } from "./view";
 
 export type View = "home" | "editor";
+
+/** What a pointer drag on the picture does. */
+export type Tool = "none" | "brush" | "eraser" | "crop";
+
+/** Brush settings (not part of the document). */
+export interface BrushSettings {
+  /** Diameter as a fraction of the photo's longer side. */
+  size: number;
+  /** 0 (soft) to 100 (hard). */
+  hardness: number;
+  /** 0 to 100. */
+  opacity: number;
+}
+
+/** Brush stroke points closer than this fraction of the brush size are
+ * skipped (the line between kept points covers them). */
+const STROKE_SPACING = 0.15;
 
 /** Labels for file dialogs, in the UI language. */
 export interface FileLabels {
@@ -140,6 +171,12 @@ export interface AppState {
   missingBackgrounds: number;
   /** AI results made by a different model version than the installed one. */
   outdated: string[];
+  tool: Tool;
+  brush: BrushSettings;
+  /** The layer the layer controls and the brush work on. */
+  selectedLayer: number | null;
+  /** The stroke being painted. */
+  painting: boolean;
 
   init(): Promise<void>;
   /** Open an image. With `discard`, asks first when adjustments would be lost. */
@@ -213,6 +250,34 @@ export interface AppState {
   discardRecovery(): Promise<void>;
   /** Save to the recovery slot if there are unsaved changes. */
   autosave(): Promise<void>;
+  setTool(tool: Tool): void;
+  setBrush(change: Partial<BrushSettings>): void;
+  selectLayer(id: number | null): void;
+  /** Add a layer on top (one undoable step) and select it. */
+  addLayer(kind: "adjustment" | "image", name: string, image?: number): Promise<void>;
+  /** Pick an image and add it as an image layer. */
+  addImageLayer(filterName: string, name: string): Promise<void>;
+  /** Change a layer: live while dragging a slider, or as one undoable step. */
+  updateLayer(id: number, change: (layer: Layer) => Layer, commit: boolean): Promise<void>;
+  removeLayer(id: number): Promise<void>;
+  moveLayer(id: number, step: 1 | -1): Promise<void>;
+  /** Paint on the selected layer's mask; points are in source pixels. */
+  beginStroke(x: number, y: number): void;
+  extendStroke(x: number, y: number): void;
+  endStroke(): Promise<void>;
+  /** Start cropping: the whole photo is shown with the crop frame. */
+  startCrop(): void;
+  setCropLive(crop: Crop): void;
+  applyCrop(): Promise<void>;
+  cancelCrop(): void;
+  /** The part of the photo shown and kept: the crop, or all while cropping. */
+  bounds(): { x: number; y: number; width: number; height: number } | null;
+}
+
+/** Camera showing the whole of `rect` (source pixels), centred. */
+function fitRect(rect: { x: number; y: number; width: number; height: number }, viewport: { width: number; height: number }) {
+  const camera = fitCamera({ width: rect.width, height: rect.height }, viewport);
+  return { ...camera, cx: rect.x + rect.width / 2, cy: rect.y + rect.height / 2 };
 }
 
 /** What makes up the saved state of a document, as text: adjustments and
@@ -294,7 +359,10 @@ export function createAppStore(api: Api) {
       set({
         document: { id: nextDocumentId++, path: status.originalPath, overview, size, info },
         view: "editor",
-        camera: viewport ? fitCamera(size, viewport) : null,
+        camera: viewport ? fitRect(cropRect(edit.adjustments.crop, size), viewport) : null,
+        tool: "none",
+        selectedLayer: null,
+        painting: false,
         edit,
         live: edit.adjustments,
         holdOriginal: false,
@@ -537,7 +605,7 @@ export function createAppStore(api: Api) {
         if (!document) {
           set({ viewport });
         } else if (!camera) {
-          set({ viewport, camera: fitCamera(document.size, viewport) });
+          set({ viewport, camera: fitRect(get().bounds() ?? { x: 0, y: 0, ...document.size }, viewport) });
         } else {
           set({ viewport, camera: clampCamera(camera, document.size, viewport) });
         }
@@ -562,7 +630,131 @@ export function createAppStore(api: Api) {
 
       fitToView() {
         const { document, viewport } = get();
-        if (document && viewport) set({ camera: fitCamera(document.size, viewport) });
+        const bounds = get().bounds();
+        if (document && viewport && bounds) set({ camera: fitRect(bounds, viewport) });
+      },
+
+      bounds() {
+        const { document, tool, live } = get();
+        if (!document) return null;
+        if (tool === "crop") return { x: 0, y: 0, ...document.size };
+        return cropRect(live.crop, document.size);
+      },
+
+      tool: "none",
+      brush: { size: 0.05, hardness: 50, opacity: 100 },
+      selectedLayer: null,
+      painting: false,
+
+      setTool(tool) {
+        if (get().tool === "crop" && tool !== "crop") get().cancelCrop();
+        set({ tool });
+        if (tool === "crop") get().fitToView();
+      },
+
+      setBrush: (change) => set({ brush: { ...get().brush, ...change } }),
+
+      selectLayer: (id) => set({ selectedLayer: id }),
+
+      async addLayer(kind, name, image = 0) {
+        if (!get().document || get().live.layers.length >= MAX_LAYERS) return;
+        const next = withNewLayer(get().live, kind, name, image);
+        const id = next.layers[next.layers.length - 1].id;
+        set({ live: next, selectedLayer: id, tool: kind === "adjustment" ? "brush" : get().tool });
+        await adoptEdit(() => api.commitAdjustments(next));
+      },
+
+      async addImageLayer(filterName, name) {
+        if (!get().document) return;
+        const path = await api.pickImage(filterName);
+        if (!path) return;
+        try {
+          const image = await api.addBackgroundImage(path);
+          await get().addLayer("image", name, image);
+        } catch (reason) {
+          set({ error: errorCode(reason) });
+        }
+      },
+
+      async updateLayer(id, change, commit) {
+        if (!get().document) return;
+        const next = withLayer(get().live, id, change);
+        set({ live: next });
+        if (commit) await adoptEdit(() => api.commitAdjustments(next));
+      },
+
+      async removeLayer(id) {
+        if (!get().document) return;
+        const next = withoutLayer(get().live, id);
+        set({ live: next, selectedLayer: get().selectedLayer === id ? null : get().selectedLayer });
+        await adoptEdit(() => api.commitAdjustments(next));
+      },
+
+      async moveLayer(id, step) {
+        if (!get().document) return;
+        const next = withLayerMoved(get().live, id, step);
+        set({ live: next });
+        await adoptEdit(() => api.commitAdjustments(next));
+      },
+
+      beginStroke(x, y) {
+        const { document, selectedLayer, tool, brush, live } = get();
+        if (!document || selectedLayer === null || (tool !== "brush" && tool !== "eraser")) return;
+        const layer = live.layers.find((l) => l.id === selectedLayer);
+        if (!layer || layer.mask.strokes.length >= MAX_STROKES) return;
+        const size = brush.size * Math.max(document.size.width, document.size.height);
+        const stroke = { points: [x, y], size, hardness: brush.hardness, opacity: brush.opacity, erase: tool === "eraser" };
+        set({
+          painting: true,
+          live: withLayer(live, selectedLayer, (l) => ({ ...l, mask: { ...l.mask, strokes: [...l.mask.strokes, stroke] } })),
+        });
+      },
+
+      extendStroke(x, y) {
+        const { painting, selectedLayer, live } = get();
+        if (!painting || selectedLayer === null) return;
+        set({
+          live: withLayer(live, selectedLayer, (l) => {
+            const strokes = [...l.mask.strokes];
+            const last = strokes[strokes.length - 1];
+            if (!last || last.points.length >= MAX_STROKE_VALUES) return l;
+            const n = last.points.length;
+            const dx = x - last.points[n - 2];
+            const dy = y - last.points[n - 1];
+            if (Math.hypot(dx, dy) < last.size * STROKE_SPACING) return l;
+            strokes[strokes.length - 1] = { ...last, points: [...last.points, x, y] };
+            return { ...l, mask: { ...l.mask, strokes } };
+          }),
+        });
+      },
+
+      async endStroke() {
+        if (!get().painting) return;
+        set({ painting: false });
+        await get().commitLive();
+      },
+
+      startCrop() {
+        if (!get().document) return;
+        get().setTool("crop");
+      },
+
+      setCropLive(crop) {
+        if (get().document && get().tool === "crop") set({ live: { ...get().live, crop } });
+      },
+
+      async applyCrop() {
+        if (!get().document) return;
+        set({ tool: "none" });
+        get().fitToView();
+        await get().commitLive();
+      },
+
+      cancelCrop() {
+        const committed = get().edit?.adjustments.crop;
+        if (committed) set({ live: { ...get().live, crop: committed } });
+        set({ tool: "none" });
+        get().fitToView();
       },
 
       pan(dx, dy) {

@@ -37,6 +37,295 @@ pub enum LightSetting {
     Softbox,
 }
 
+/// Pixel tolerance when a crop edge is turned into whole pixels.
+const CROP_SNAP: f64 = 0.01;
+
+/// Most layers a document may have.
+pub const MAX_LAYERS: usize = 16;
+/// Most strokes on one layer mask.
+pub const MAX_STROKES: usize = 5000;
+/// Most coordinates (x and y each count) in one stroke.
+pub const MAX_STROKE_VALUES: usize = 20_000;
+
+/// The part of the photo that is kept, as fractions of its width and
+/// height. The default keeps everything.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Crop {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl Default for Crop {
+    fn default() -> Self {
+        Crop { x: 0.0, y: 0.0, width: 1.0, height: 1.0 }
+    }
+}
+
+/// Smallest crop, as a fraction of the photo.
+const MIN_CROP: f32 = 0.01;
+
+impl Crop {
+    /// Inside the photo and at least 1% of it on each side.
+    pub fn clamped(self) -> Crop {
+        let unit = |v: f32, default: f32| if v.is_finite() { v.clamp(0.0, 1.0) } else { default };
+        let x = unit(self.x, 0.0).min(1.0 - MIN_CROP);
+        let y = unit(self.y, 0.0).min(1.0 - MIN_CROP);
+        // 1 - x can round to just under MIN_CROP; never let max < min.
+        let width = unit(self.width, 1.0).clamp(MIN_CROP, (1.0 - x).max(MIN_CROP));
+        let height = unit(self.height, 1.0).clamp(MIN_CROP, (1.0 - y).max(MIN_CROP));
+        Crop { x, y, width, height }
+    }
+
+    /// The kept region of a `width` x `height` photo in whole source
+    /// pixels: (x, y, w, h), at least 1 x 1.
+    pub fn rect(&self, width: u32, height: u32) -> (u32, u32, u32, u32) {
+        let c = self.clamped();
+        // Edges within a hundredth of a pixel of a whole pixel snap to it,
+        // so rounding in the fractions does not add a row or column.
+        let down = |v: f32, size: u32| (f64::from(v) * f64::from(size) + CROP_SNAP).floor() as u32;
+        let up = |v: f32, size: u32| (f64::from(v) * f64::from(size) - CROP_SNAP).ceil().max(0.0) as u32;
+        let x0 = down(c.x, width).min(width.saturating_sub(1));
+        let y0 = down(c.y, height).min(height.saturating_sub(1));
+        let x1 = up(c.x + c.width, width).clamp(x0 + 1, width.max(x0 + 1));
+        let y1 = up(c.y + c.height, height).clamp(y0 + 1, height.max(y0 + 1));
+        (x0, y0, x1 - x0, y1 - y0)
+    }
+}
+
+/// What a layer adds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LayerKind {
+    /// Local light and colour adjustments.
+    #[default]
+    Adjustment,
+    /// Another image (number `image` of the document's images).
+    Image,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Blend {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    SoftLight,
+    Darken,
+    Lighten,
+    Difference,
+}
+
+/// What a layer mask starts as, before strokes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MaskStart {
+    #[default]
+    All,
+    None,
+    /// The subject, from subject/background separation.
+    Subject,
+    Background,
+}
+
+/// A brush stroke on a layer mask.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct StrokeData {
+    /// x, y pairs in source pixels.
+    pub points: Vec<f32>,
+    /// Brush diameter in source pixels.
+    pub size: f32,
+    /// 0 (soft) to 100 (hard).
+    pub hardness: f32,
+    /// 0 to 100.
+    pub opacity: f32,
+    /// Removes from the mask.
+    pub erase: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Mask {
+    pub start: MaskStart,
+    pub invert: bool,
+    pub strokes: Vec<StrokeData>,
+}
+
+/// The adjustments an adjustment layer can make (same ranges as the
+/// global ones).
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LayerAdjustments {
+    pub exposure: f32,
+    pub contrast: f32,
+    pub highlights: f32,
+    pub shadows: f32,
+    pub temperature: f32,
+    pub tint: f32,
+    pub saturation: f32,
+    pub vibrance: f32,
+}
+
+/// A layer over the photo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Layer {
+    /// Stable within the document (for the UI).
+    pub id: u32,
+    pub name: String,
+    pub kind: LayerKind,
+    pub visible: bool,
+    /// 0 to 100.
+    pub opacity: f32,
+    pub blend: Blend,
+    pub mask: Mask,
+    pub adjustments: LayerAdjustments,
+    /// For image layers: number of the document image (1-based).
+    pub image: u32,
+}
+
+impl Default for Layer {
+    fn default() -> Self {
+        Layer {
+            id: 0,
+            name: String::new(),
+            kind: LayerKind::Adjustment,
+            visible: true,
+            opacity: 100.0,
+            blend: Blend::Normal,
+            mask: Mask::default(),
+            adjustments: LayerAdjustments::default(),
+            image: 0,
+        }
+    }
+}
+
+fn clamp_percent(v: f32, default: f32) -> f32 {
+    if v.is_finite() { v.clamp(0.0, 100.0) } else { default }
+}
+
+impl Layer {
+    fn clamped(&self) -> Layer {
+        let a = &self.adjustments;
+        Layer {
+            id: self.id,
+            name: self.name.chars().take(80).collect(),
+            kind: self.kind,
+            visible: self.visible,
+            opacity: clamp_percent(self.opacity, 100.0),
+            blend: self.blend,
+            mask: Mask {
+                start: self.mask.start,
+                invert: self.mask.invert,
+                strokes: self
+                    .mask
+                    .strokes
+                    .iter()
+                    .take(MAX_STROKES)
+                    .filter_map(|stroke| {
+                        let mut points: Vec<f32> =
+                            stroke.points.iter().copied().take(MAX_STROKE_VALUES).collect();
+                        points.truncate(points.len() / 2 * 2);
+                        let usable = !points.is_empty()
+                            && points.iter().all(|v| v.is_finite())
+                            && stroke.size.is_finite()
+                            && stroke.size > 0.0;
+                        usable.then(|| StrokeData {
+                            points,
+                            size: stroke.size.min(100_000.0),
+                            hardness: clamp_percent(stroke.hardness, 50.0),
+                            opacity: clamp_percent(stroke.opacity, 100.0),
+                            erase: stroke.erase,
+                        })
+                    })
+                    .collect(),
+            },
+            adjustments: LayerAdjustments {
+                exposure: fix(a.exposure, 5.0),
+                contrast: fix(a.contrast, 100.0),
+                highlights: fix(a.highlights, 100.0),
+                shadows: fix(a.shadows, 100.0),
+                temperature: fix(a.temperature, 100.0),
+                tint: fix(a.tint, 100.0),
+                saturation: fix(a.saturation, 100.0),
+                vibrance: fix(a.vibrance, 100.0),
+            },
+            image: self.image,
+        }
+    }
+
+    fn engine_adjustments(&self) -> engine_sys::Adjustments {
+        let a = &self.adjustments;
+        engine_sys::Adjustments {
+            exposure: a.exposure,
+            contrast: a.contrast,
+            highlights: a.highlights,
+            shadows: a.shadows,
+            temperature: a.temperature,
+            tint: a.tint,
+            saturation: a.saturation,
+            vibrance: a.vibrance,
+            ..Default::default()
+        }
+    }
+}
+
+/// Layers converted for the engine; the engine layers borrow from it.
+pub struct PreparedLayers<'a> {
+    items: Vec<(&'a Layer, engine_sys::Adjustments, Vec<engine_sys::Stroke<'a>>)>,
+}
+
+impl<'a> PreparedLayers<'a> {
+    /// The engine layers, bottom to top: hidden layers and image layers
+    /// whose image is missing are left out. `images[n - 1]` is image n.
+    pub fn layers<'b>(
+        &'b self,
+        matte: Option<&'b engine_sys::Matte>,
+        images: &[Option<&'b engine_sys::Source>],
+    ) -> Vec<engine_sys::Layer<'b>> {
+        use engine_sys::{BlendMode as B, LayerContent, MaskBase as M};
+        self.items
+            .iter()
+            .filter_map(|(layer, colour, strokes)| {
+                let content = match layer.kind {
+                    LayerKind::Adjustment => LayerContent::Adjustment(colour),
+                    LayerKind::Image => LayerContent::Image(
+                        (layer.image as usize).checked_sub(1).and_then(|i| images.get(i).copied().flatten())?,
+                    ),
+                };
+                Some(engine_sys::Layer {
+                    content,
+                    blend: match layer.blend {
+                        Blend::Normal => B::Normal,
+                        Blend::Multiply => B::Multiply,
+                        Blend::Screen => B::Screen,
+                        Blend::Overlay => B::Overlay,
+                        Blend::SoftLight => B::SoftLight,
+                        Blend::Darken => B::Darken,
+                        Blend::Lighten => B::Lighten,
+                        Blend::Difference => B::Difference,
+                    },
+                    opacity: layer.opacity / 100.0,
+                    mask_base: match layer.mask.start {
+                        MaskStart::All => M::All,
+                        MaskStart::None => M::None,
+                        MaskStart::Subject => M::Subject,
+                        MaskStart::Background => M::Background,
+                    },
+                    mask_invert: layer.mask.invert,
+                    matte,
+                    strokes: strokes.as_slice(),
+                })
+            })
+            .collect()
+    }
+}
+
 /// Light and colour adjustments. All zero leaves the image unchanged.
 /// Exposure is in stops (EV), -5 to +5; every other value is -100 to +100.
 /// HSL arrays are per colour band: red, orange, yellow, green, aqua, blue,
@@ -46,7 +335,7 @@ pub enum LightSetting {
 /// separated: `background_image` is the number of a replacement image added
 /// to the open document (0 for none). Missing fields
 /// read as zero, so older saved data loads.
-#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Adjustments {
     pub exposure: f32,
@@ -89,6 +378,9 @@ pub struct Adjustments {
     pub light_height: f32,
     /// Light only the subject (needs subject/background separation).
     pub light_subject_only: bool,
+    /// Layers over the photo, bottom first.
+    pub layers: Vec<Layer>,
+    pub crop: Crop,
 }
 
 fn fix(value: f32, limit: f32) -> f32 {
@@ -102,7 +394,7 @@ fn fix(value: f32, limit: f32) -> f32 {
 impl Adjustments {
     /// The same adjustments with every value inside its allowed range and
     /// non-numbers replaced by zero.
-    pub fn clamped(self) -> Adjustments {
+    pub fn clamped(&self) -> Adjustments {
         Adjustments {
             exposure: fix(self.exposure, 5.0),
             brightness: fix(self.brightness, 100.0),
@@ -134,6 +426,34 @@ impl Adjustments {
             light_warmth: fix(self.light_warmth, 100.0),
             light_height: fix(self.light_height, 100.0).max(0.0),
             light_subject_only: self.light_subject_only,
+            layers: self.layers.iter().take(MAX_LAYERS).map(Layer::clamped).collect(),
+            crop: self.crop.clamped(),
+        }
+    }
+
+    /// The visible layers prepared for the engine (from clamped values).
+    pub fn prepare_layers(&self) -> PreparedLayers<'_> {
+        PreparedLayers {
+            items: self
+                .layers
+                .iter()
+                .filter(|layer| layer.visible && layer.opacity > 0.0)
+                .map(|layer| {
+                    let strokes = layer
+                        .mask
+                        .strokes
+                        .iter()
+                        .map(|s| engine_sys::Stroke {
+                            points: &s.points,
+                            size: s.size,
+                            hardness: s.hardness / 100.0,
+                            opacity: s.opacity / 100.0,
+                            erase: s.erase,
+                        })
+                        .collect();
+                    (layer, layer.engine_adjustments(), strokes)
+                })
+                .collect(),
         }
     }
 
@@ -206,7 +526,7 @@ impl Adjustments {
 
     /// The colour part, for the engine's colour pipeline (portrait
     /// retouching is passed separately, see [`Adjustments::skin_smoothing`]).
-    pub fn to_engine(self) -> engine_sys::Adjustments {
+    pub fn to_engine(&self) -> engine_sys::Adjustments {
         let a = self.clamped();
         engine_sys::Adjustments {
             exposure: a.exposure,
@@ -228,7 +548,7 @@ impl Adjustments {
 
     /// These adjustments with the colour values replaced by `suggested`
     /// (from one-click enhancement); retouching is kept.
-    pub fn with_colour(self, suggested: engine_sys::Adjustments) -> Adjustments {
+    pub fn with_colour(&self, suggested: engine_sys::Adjustments) -> Adjustments {
         Adjustments {
             exposure: suggested.exposure,
             brightness: suggested.brightness,
@@ -244,7 +564,7 @@ impl Adjustments {
             hsl_hue: suggested.hsl_hue,
             hsl_saturation: suggested.hsl_saturation,
             hsl_luminance: suggested.hsl_luminance,
-            ..self
+            ..self.clone()
         }
         .clamped()
     }
@@ -258,7 +578,7 @@ pub struct History {
 }
 
 /// What the UI needs to show about the edit state.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditState {
     pub adjustments: Adjustments,
@@ -279,7 +599,7 @@ impl Default for History {
 
 impl History {
     pub fn current(&self) -> Adjustments {
-        self.states[self.index]
+        self.states[self.index].clone()
     }
 
     /// Record a change as one undoable step. Values are clamped first. A
@@ -324,7 +644,7 @@ impl History {
     /// or a position past the end is repaired rather than refused, and
     /// only the newest steps are kept beyond the limit.
     pub fn from_parts(states: Vec<Adjustments>, index: usize) -> History {
-        let mut states: Vec<Adjustments> = states.into_iter().map(Adjustments::clamped).collect();
+        let mut states: Vec<Adjustments> = states.iter().map(Adjustments::clamped).collect();
         if states.is_empty() {
             return History::default();
         }
@@ -496,7 +816,7 @@ mod tests {
         assert_eq!(a.clamped().background_blur, 100.0);
         assert_eq!(a.background_color, [1, 2, 3]);
         assert!(!a.is_identity());
-        assert_eq!(serde_json::to_value(a).unwrap()["backgroundMode"], "blur");
+        assert_eq!(serde_json::to_value(&a).unwrap()["backgroundMode"], "blur");
         // One-click enhancement keeps background choices.
         assert_eq!(a.with_colour(engine_sys::Adjustments::default()).background_mode, BackgroundSetting::Blur);
     }
@@ -533,7 +853,7 @@ mod tests {
         assert_eq!(light.kind, engine_sys::LightKind::Softbox);
         assert_eq!(light.y, 2.0); // clamped
         assert!(light.subject.is_some());
-        let dark = Adjustments { light_intensity: 0.0, ..on };
+        let dark = Adjustments { light_intensity: 0.0, ..on.clone() };
         assert!(dark.light(None, None).is_none());
         // One-click enhancement keeps the light.
         assert_eq!(on.with_colour(engine_sys::Adjustments::default()).light_kind, LightSetting::Softbox);
@@ -558,5 +878,58 @@ mod tests {
         let trimmed = History::from_parts(long, MAX_HISTORY + 9);
         assert_eq!(trimmed.parts().0.len(), MAX_HISTORY);
         assert_eq!(trimmed.parts().1, MAX_HISTORY - 1);
+    }
+
+    #[test]
+    fn crops_stay_inside_the_photo_in_whole_pixels() {
+        assert_eq!(Crop::default().rect(4000, 3000), (0, 0, 4000, 3000));
+        let c = Crop { x: 0.25, y: 0.1, width: 0.5, height: 0.5 };
+        assert_eq!(c.rect(4000, 3000), (1000, 300, 2000, 1500));
+        let wild = Crop { x: -1.0, y: f32::NAN, width: 5.0, height: 0.0 }.clamped();
+        assert_eq!((wild.x, wild.y, wild.width), (0.0, 0.0, 1.0));
+        assert!(wild.height >= 0.01);
+        let corner = Crop { x: 0.999, y: 0.999, width: 0.5, height: 0.5 }.rect(100, 100);
+        assert!(corner.0 + corner.2 <= 100 && corner.2 >= 1 && corner.1 + corner.3 <= 100);
+        let cropped = Adjustments { crop: c, ..Default::default() };
+        assert!(!cropped.is_identity());
+    }
+
+    #[test]
+    fn layers_round_trip_are_clamped_and_prepared_for_the_engine() {
+        let json = r#"{
+            "layers": [
+                {"id": 1, "name": "dodge", "kind": "adjustment", "blend": "soft-light", "opacity": 250,
+                 "adjustments": {"exposure": 9},
+                 "mask": {"start": "none", "strokes": [
+                    {"points": [1, 2, 3, 4, 5], "size": 20, "hardness": 80, "opacity": 100},
+                    {"points": [1, 2], "size": -3},
+                    {"points": [], "size": 10}
+                 ]}},
+                {"id": 2, "kind": "image", "image": 1, "visible": false}
+            ]
+        }"#;
+        let a: Adjustments = serde_json::from_str(json).unwrap();
+        assert!(!a.is_identity());
+        let c = a.clamped();
+        let first = &c.layers[0];
+        assert_eq!(first.blend, Blend::SoftLight);
+        assert_eq!(first.opacity, 100.0);
+        assert_eq!(first.adjustments.exposure, 5.0);
+        assert_eq!(first.mask.strokes.len(), 1, "unusable strokes dropped");
+        assert_eq!(first.mask.strokes[0].points, vec![1.0, 2.0, 3.0, 4.0], "odd coordinate dropped");
+        assert!(c.layers[1].visible == false && c.layers[1].opacity == 100.0, "defaults fill missing fields");
+        assert_eq!(serde_json::to_value(&c).unwrap()["layers"][0]["blend"], "soft-light");
+
+        let prepared = c.prepare_layers();
+        let engine_layers = prepared.layers(None, &[]);
+        assert_eq!(engine_layers.len(), 1, "the hidden image layer is left out");
+        assert_eq!(engine_layers[0].strokes[0].hardness, 0.8);
+        assert_eq!(engine_layers[0].mask_base, engine_sys::MaskBase::None);
+
+        let many = Adjustments {
+            layers: (0..40).map(|i| Layer { id: i, ..Default::default() }).collect(),
+            ..Default::default()
+        };
+        assert_eq!(many.clamped().layers.len(), MAX_LAYERS);
     }
 }

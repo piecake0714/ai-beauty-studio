@@ -43,3 +43,4 @@ void run_portrait_tests();
 void run_background_tests();
 void run_light_tests();
 void run_export_tests();
+void run_layer_tests();

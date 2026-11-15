@@ -136,6 +136,61 @@ export interface Adjustments {
   lightHeight: number;
   /** Light only the subject (needs subject/background separation). */
   lightSubjectOnly: boolean;
+  /** Layers over the photo, bottom first. */
+  layers: Layer[];
+  /** The kept part of the photo, as fractions of its width and height. */
+  crop: Crop;
+}
+
+export interface Crop {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type LayerKind = "adjustment" | "image";
+export type BlendMode = "normal" | "multiply" | "screen" | "overlay" | "soft-light" | "darken" | "lighten" | "difference";
+export type MaskStart = "all" | "none" | "subject" | "background";
+
+/** A brush stroke on a layer mask. */
+export interface Stroke {
+  /** x, y pairs in source pixels. */
+  points: number[];
+  /** Brush diameter in source pixels. */
+  size: number;
+  /** 0 (soft) to 100 (hard). */
+  hardness: number;
+  /** 0 to 100. */
+  opacity: number;
+  erase: boolean;
+}
+
+/** What an adjustment layer changes (same ranges as the global sliders). */
+export interface LayerAdjustments {
+  exposure: number;
+  contrast: number;
+  highlights: number;
+  shadows: number;
+  temperature: number;
+  tint: number;
+  saturation: number;
+  vibrance: number;
+}
+
+export interface Layer {
+  /** Stable within the document. */
+  id: number;
+  name: string;
+  kind: LayerKind;
+  visible: boolean;
+  /** 0 to 100. */
+  opacity: number;
+  blend: BlendMode;
+  mask: { start: MaskStart; invert: boolean; strokes: Stroke[] };
+  adjustments: LayerAdjustments;
+  /** For image layers: number of the document image. */
+  image: number;
 }
 
 export type LightKind = "none" | "natural" | "diffuse" | "reflector" | "softbox";
@@ -152,6 +207,8 @@ export type ScalarAdjustment = Exclude<
   | "backgroundImage"
   | "lightKind"
   | "lightSubjectOnly"
+  | "layers"
+  | "crop"
 >;
 export type BandAdjustment = "hslHue" | "hslSaturation" | "hslLuminance";
 
@@ -186,6 +243,8 @@ export const NO_ADJUSTMENTS: Adjustments = Object.freeze({
   lightWarmth: 0,
   lightHeight: 0,
   lightSubjectOnly: false,
+  layers: Object.freeze([]) as unknown as Layer[],
+  crop: Object.freeze({ x: 0, y: 0, width: 1, height: 1 }),
 }) as Adjustments;
 
 /** Face detection for the open image. */

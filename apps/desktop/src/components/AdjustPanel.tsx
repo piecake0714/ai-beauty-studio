@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { LayersSection } from "./LayersSection";
 import { BANDS, BEGINNER, COLOUR, LIGHTING, fromHex, hasHiddenInBeginner, isIdentity, LIGHT, PORTRAIT, toHex, withBand, withScalar } from "../adjustments";
 import { useApp, useAppStore, useI18n } from "../context";
 import { errorMessage, type MessageKey } from "../i18n";
@@ -405,6 +406,8 @@ export function AdjustPanel() {
           </>
         )}
       </section>
+
+      <LayersSection />
 
       {advanced && (
         <section aria-labelledby="hsl-title">

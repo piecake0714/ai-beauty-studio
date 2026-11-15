@@ -174,6 +174,51 @@ typedef struct aibs_light {
     const aibs_shape* shape;   /* may be NULL */
 } aibs_light;
 
+/* ---------------------------------------------------------------------
+ * Layers (applied after everything else, bottom to top)
+ * ------------------------------------------------------------------- */
+
+#define AIBS_LAYER_ADJUSTMENT 0  /* local light and colour adjustments */
+#define AIBS_LAYER_IMAGE 1       /* another image, scaled to cover */
+
+#define AIBS_BLEND_NORMAL 0
+#define AIBS_BLEND_MULTIPLY 1
+#define AIBS_BLEND_SCREEN 2
+#define AIBS_BLEND_OVERLAY 3
+#define AIBS_BLEND_SOFT_LIGHT 4
+#define AIBS_BLEND_DARKEN 5
+#define AIBS_BLEND_LIGHTEN 6
+#define AIBS_BLEND_DIFFERENCE 7
+
+#define AIBS_MASK_ALL 0         /* the layer shows everywhere */
+#define AIBS_MASK_NONE 1        /* nowhere (until painted) */
+#define AIBS_MASK_SUBJECT 2     /* where the matte says subject */
+#define AIBS_MASK_BACKGROUND 3  /* where the matte says background */
+
+/* A brush stroke on a layer mask: a path through points (x, y pairs, in
+ * source pixels) with a round brush `size` source pixels across. */
+typedef struct aibs_stroke {
+    const float* points;
+    uint32_t point_count;
+    float size;
+    float hardness;  /* 0 (soft edge) .. 1 (hard edge) */
+    float opacity;   /* 0..1 */
+    uint32_t erase;  /* 1: remove from the mask instead of adding */
+} aibs_stroke;
+
+typedef struct aibs_layer {
+    uint32_t kind;        /* AIBS_LAYER_* */
+    uint32_t blend;       /* AIBS_BLEND_* */
+    float opacity;        /* 0..1 */
+    uint32_t mask_base;   /* AIBS_MASK_*: the mask before strokes */
+    uint32_t mask_invert; /* 1: invert the finished mask */
+    const aibs_matte* matte;               /* for the subject/background bases */
+    const aibs_adjustments* adjustments;   /* AIBS_LAYER_ADJUSTMENT */
+    const aibs_source* image;              /* AIBS_LAYER_IMAGE */
+    const aibs_stroke* strokes;
+    uint32_t stroke_count;
+} aibs_layer;
+
 /*
  * A decoded image kept at full resolution inside the engine, with a
  * precomputed pyramid of smaller copies so any region can be shown quickly
@@ -197,7 +242,8 @@ AIBS_API void aibs_source_size(const aibs_source* source, uint32_t* width, uint3
  *
  * portrait (may be NULL) retouches skin first; adjustments (may be NULL)
  * follow, then light (may be NULL); background (may be NULL) is
- * composited last. The leftmost original_columns output columns get none
+ * composited, then the layers (layer_count of them, may be 0) are applied
+ * bottom to top. The leftmost original_columns output columns get none
  * of them, for a before/after split view; 0 changes everything, out_width
  * or more shows the original only.
  */
@@ -208,6 +254,8 @@ AIBS_API int32_t aibs_source_render(const aibs_source* source,
                                     const aibs_adjustments* adjustments,
                                     const aibs_background* background,
                                     const aibs_light* light,
+                                    const aibs_layer* layers,
+                                    uint32_t layer_count,
                                     uint32_t original_columns,
                                     aibs_image* out);
 

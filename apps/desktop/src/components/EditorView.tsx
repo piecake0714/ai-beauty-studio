@@ -14,6 +14,9 @@ function EditToolbar() {
   const setHoldOriginal = useApp((s) => s.setHoldOriginal);
   const autoEnhance = useApp((s) => s.autoEnhance);
   const enhancing = useApp((s) => s.enhancing);
+  const cropping = useApp((s) => s.tool === "crop");
+  const startCrop = useApp((s) => s.startCrop);
+  const cancelCrop = useApp((s) => s.cancelCrop);
 
   return (
     <div className="edit-toolbar" role="toolbar" aria-label={t("nav.editor")}>
@@ -25,6 +28,14 @@ function EditToolbar() {
       </button>
       <button type="button" className="ghost small" onClick={() => void autoEnhance()} disabled={enhancing} title={t("edit.enhanceHint")}>
         ✦ {enhancing ? t("edit.enhancing") : t("edit.enhance")}
+      </button>
+      <button
+        type="button"
+        className={cropping ? "ghost small pressed" : "ghost small"}
+        aria-pressed={cropping}
+        onClick={() => (cropping ? cancelCrop() : startCrop())}
+      >
+        ⧉ {t("crop.button")}
       </button>
       <div className="spacer" />
       <button

@@ -1,10 +1,11 @@
-import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { errorCode, type RenderRequest } from "../api";
 import { useApp, useI18n } from "../context";
 import { parseFrame, type Frame } from "../frame";
-import { adjustmentsKey, sameAdjustments } from "../adjustments";
+import { adjustmentsKey, cropRect, FULL_CROP, sameAdjustments } from "../adjustments";
 import type { Adjustments } from "../types";
 import { placeFrame, sameCamera, toImage, toViewport, visibleRegion, type Camera, type Size } from "../view";
+import { CropOverlay } from "./CropOverlay";
 
 /** After a zoom or pan, wait this long for the movement to pause before
  * asking for a sharp render. Adjustment changes are sent at once. */
@@ -84,6 +85,20 @@ export function ImageCanvas() {
   const shaped = useApp((s) => s.shape?.state === "ready");
   const setLive = useApp((s) => s.setLive);
   const commitLive = useApp((s) => s.commitLive);
+  const tool = useApp((s) => s.tool);
+  const brush = useApp((s) => s.brush);
+  const canPaint = useApp(
+    (s) => (s.tool === "brush" || s.tool === "eraser") && s.live.layers.some((l) => l.id === s.selectedLayer),
+  );
+  const beginStroke = useApp((s) => s.beginStroke);
+  const extendStroke = useApp((s) => s.extendStroke);
+  const endStroke = useApp((s) => s.endStroke);
+  const crop = useApp((s) => s.live.crop);
+  const bounds = useMemo(
+    () => (document ? (tool === "crop" ? { x: 0, y: 0, ...document.size } : cropRect(crop, document.size)) : null),
+    [document, tool, crop],
+  );
+  const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -101,11 +116,14 @@ export function ImageCanvas() {
   void holdOriginal;
   const columns = viewport ? originalColumns(viewport.width) : 0;
   // Uncommitted adjustments mean a slider is being dragged.
-  const draft = committed !== null && !sameAdjustments(live, committed);
-  const look = lookKey(live, columns, draft, separated) + (shaped ? "|shaped" : "");
+  // The crop does not change pixels (only which are shown), so it does
+  // not call for a new render.
+  const renderLive = { ...live, crop: FULL_CROP };
+  const draft = committed !== null && !sameAdjustments(renderLive, { ...committed, crop: FULL_CROP });
+  const look = lookKey(renderLive, columns, draft, separated) + (shaped ? "|shaped" : "");
   // Latest values for callbacks that outlive this render.
-  const latestRef = useRef({ document, camera, viewport, live, columns, look, draft });
-  latestRef.current = { document, camera, viewport, live, columns, look, draft };
+  const latestRef = useRef({ document, camera, viewport, live, columns, look, draft, bounds });
+  latestRef.current = { document, camera, viewport, live, columns, look, draft, bounds };
 
   // Track the canvas size in device pixels.
   useEffect(() => {
@@ -145,6 +163,25 @@ export function ImageCanvas() {
     context.clearRect(0, 0, canvas.width, canvas.height);
     const overview = overviewRef.current;
     if (!document || !camera || !overview) return;
+    context.save();
+    try {
+      drawImage(context, viewport);
+    } finally {
+      context.restore();
+    }
+  }
+
+  /** Draw the image, clipped to the shown part (the crop). */
+  function drawImage(context: CanvasRenderingContext2D, viewport: Size) {
+    const { document, camera, bounds: shown } = latestRef.current;
+    const overview = overviewRef.current;
+    if (!document || !camera || !overview) return;
+    if (shown) {
+      const corner = toViewport(camera, viewport, { x: shown.x, y: shown.y });
+      context.beginPath();
+      context.rect(corner.x, corner.y, shown.width * camera.zoom, shown.height * camera.zoom);
+      context.clip();
+    }
 
     if (latestRef.current.live.backgroundMode === "transparent") {
       // Checkerboard under the image, so removed areas read as transparent.
@@ -272,13 +309,36 @@ export function ImageCanvas() {
     return () => canvas.removeEventListener("wheel", onWheel);
   }, [zoomBy]);
 
+  /** Source pixel under a pointer event. */
+  const sourcePoint = (event: ReactPointerEvent<HTMLElement>) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    const { camera: cam, viewport: view } = latestRef.current;
+    if (!rect || !cam || !view) return null;
+    const ratio = window.devicePixelRatio || 1;
+    return toImage(cam, view, { x: (event.clientX - rect.left) * ratio, y: (event.clientY - rect.top) * ratio });
+  };
+
   const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (event.button !== 0 && event.button !== 1) return;
     event.currentTarget.setPointerCapture(event.pointerId);
+    if (canPaint && event.button === 0) {
+      const point = sourcePoint(event);
+      if (point) beginStroke(point.x, point.y);
+      return;
+    }
     dragRef.current = { x: event.clientX, y: event.clientY };
   };
 
   const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (canPaint) {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (rect) setCursor({ x: event.clientX - rect.left, y: event.clientY - rect.top });
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        const point = sourcePoint(event);
+        if (point) extendStroke(point.x, point.y);
+        return;
+      }
+    }
     const last = dragRef.current;
     if (!last) return;
     const ratio = window.devicePixelRatio || 1;
@@ -288,6 +348,7 @@ export function ImageCanvas() {
 
   const endDrag = () => {
     dragRef.current = null;
+    void endStroke();
   };
 
   // Split divider: dragged with the pointer, moved with arrow keys.
@@ -330,8 +391,23 @@ export function ImageCanvas() {
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
+        onPointerLeave={() => setCursor(null)}
+        className={canPaint ? "painting" : undefined}
       />
-      {lightDot && (
+      {canPaint && cursor && camera && document && (
+        <div
+          className="brush-cursor"
+          aria-hidden="true"
+          style={{
+            left: `${cursor.x}px`,
+            top: `${cursor.y}px`,
+            width: `${(brush.size * Math.max(document.size.width, document.size.height) * camera.zoom) / (window.devicePixelRatio || 1)}px`,
+            height: `${(brush.size * Math.max(document.size.width, document.size.height) * camera.zoom) / (window.devicePixelRatio || 1)}px`,
+          }}
+        />
+      )}
+      {tool === "crop" && <CropOverlay />}
+      {lightDot && tool !== "crop" && (
         <div
           className="light-handle"
           style={{ left: `${lightDot.x / ratio}px`, top: `${lightDot.y / ratio}px` }}
