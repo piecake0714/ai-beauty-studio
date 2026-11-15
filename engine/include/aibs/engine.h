@@ -131,6 +131,62 @@ AIBS_API int32_t aibs_source_render(const aibs_source* source,
 /* Release a source. Safe on NULL. */
 AIBS_API void aibs_source_free(aibs_source* source);
 
+/* ---------------------------------------------------------------------
+ * Hardware detection
+ * ------------------------------------------------------------------- */
+
+typedef struct aibs_gpu_info {
+    char name[256];             /* UTF-8, NUL-terminated */
+    uint32_t vendor_id;         /* PCI vendor id, e.g. 0x10DE NVIDIA, 0x1002 AMD, 0x8086 Intel */
+    uint32_t is_software;       /* 1 for a software renderer (no real GPU) */
+    uint64_t dedicated_memory;  /* bytes of dedicated video memory */
+    uint64_t shared_memory;     /* bytes of system memory the GPU may use */
+} aibs_gpu_info;
+
+/* Fill up to `capacity` entries with the system's display adapters, in the
+ * order the system prefers them, and return how many exist. */
+AIBS_API uint32_t aibs_gpu_list(aibs_gpu_info* out, uint32_t capacity);
+
+/* ---------------------------------------------------------------------
+ * AI runtime (ONNX Runtime)
+ * ------------------------------------------------------------------- */
+
+#define AIBS_PROVIDER_CPU 0
+#define AIBS_PROVIDER_DIRECTML 1
+
+#define AIBS_ERR_MODEL_INVALID 10
+#define AIBS_ERR_INFERENCE_FAILED 11
+
+/* A loaded model. Runs may be called from several threads. */
+typedef struct aibs_ai_session aibs_ai_session;
+
+/* ONNX Runtime version string, statically allocated. */
+AIBS_API const char* aibs_ai_runtime_version(void);
+
+/*
+ * Load a model from memory. `preferred` is AIBS_PROVIDER_DIRECTML (GPU,
+ * falling back to CPU if it cannot be used) or AIBS_PROVIDER_CPU.
+ * *used_provider receives the provider actually in use. When DirectML was
+ * wanted but not used, `note` (if not NULL) receives the reason, UTF-8,
+ * truncated to note_len bytes including the NUL.
+ */
+AIBS_API int32_t aibs_ai_open(const uint8_t* model, size_t len, int32_t preferred,
+                              aibs_ai_session** out, int32_t* used_provider,
+                              char* note, size_t note_len);
+
+/*
+ * Run a model with one float32 input and one float32 output. `shape` has
+ * `rank` dimensions. On success *output points to the result (release with
+ * aibs_ai_free) and out_shape receives up to 8 dimensions, *out_rank the
+ * count.
+ */
+AIBS_API int32_t aibs_ai_run(aibs_ai_session* session,
+                             const float* input, const int64_t* shape, size_t rank,
+                             float** output, int64_t* out_shape, size_t* out_rank);
+
+AIBS_API void aibs_ai_free(float* data);
+AIBS_API void aibs_ai_close(aibs_ai_session* session);
+
 #ifdef __cplusplus
 }
 #endif

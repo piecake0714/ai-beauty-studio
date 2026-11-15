@@ -1,0 +1,15 @@
+{
+  "formatVersion": 1,
+  "models": [
+    {
+      "id": "test-luma",
+      "version": "1",
+      "file": "files/test-luma-v1.onnx",
+      "sha256": "11e654ce49cf3554c232a2846a076884794e0375414bdd7781c4d3124ebd94fa",
+      "purpose": "Self-test of the AI runtime: Rec. 709 luma of an RGB image",
+      "input": { "name": "image", "shape": [1, 3, -1, -1] },
+      "output": { "name": "luma", "shape": [1, 1, -1, -1] },
+      "license": "licenses/test-luma.json"
+    }
+  ]
+}

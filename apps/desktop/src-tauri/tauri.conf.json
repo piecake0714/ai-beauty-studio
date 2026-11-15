@@ -34,7 +34,10 @@
       "icons/icon.png"
     ],
     "resources": {
-      "../../../engine/dist/bin/aibs_engine.dll": "aibs_engine.dll",
+      "../../../engine/dist/bin/*.dll": "./",
+      "../../../models/registry.json": "models/registry.json",
+      "../../../models/files/*": "models/files/",
+      "../../../models/licenses/*": "models/licenses/",
       "resources/THIRD_PARTY_NOTICES.txt": "THIRD_PARTY_NOTICES.txt"
     },
     "windows": {

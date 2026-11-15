@@ -29,14 +29,19 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=dylib=aibs_engine");
 
-    // On Windows the DLL must sit next to every executable that loads it:
-    // copy it beside the app binary and beside test binaries.
+    // On Windows the engine DLL and the DLLs it loads (ONNX Runtime,
+    // DirectML) must sit next to every executable that uses them: copy them
+    // beside the app binary and beside test binaries.
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        let dll = bin_dir.join("aibs_engine.dll");
-        println!("cargo:rerun-if-changed={}", dll.display());
-        if !dll.is_file() {
-            panic!("engine DLL not found at {}", dll.display());
+        let engine_dll = bin_dir.join("aibs_engine.dll");
+        if !engine_dll.is_file() {
+            panic!("engine DLL not found at {}", engine_dll.display());
         }
+        let dlls: Vec<PathBuf> = fs::read_dir(&bin_dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("dll")))
+            .collect();
         // OUT_DIR = <target>/<profile>/build/<pkg>-<hash>/out
         let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
         let profile_dir = out_dir
@@ -44,9 +49,12 @@ fn main() {
             .nth(3)
             .expect("unexpected OUT_DIR layout")
             .to_path_buf();
-        for dir in [profile_dir.clone(), profile_dir.join("deps")] {
-            fs::create_dir_all(&dir).unwrap();
-            fs::copy(&dll, dir.join("aibs_engine.dll")).unwrap();
+        for dll in &dlls {
+            println!("cargo:rerun-if-changed={}", dll.display());
+            for dir in [profile_dir.clone(), profile_dir.join("deps")] {
+                fs::create_dir_all(&dir).unwrap();
+                fs::copy(dll, dir.join(dll.file_name().unwrap())).unwrap();
+            }
         }
     }
 }

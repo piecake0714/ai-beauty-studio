@@ -57,6 +57,23 @@ jobs:
             echo "vcpkg:  $(git -C "$VCPKG_INSTALLATION_ROOT" rev-parse HEAD)"
           } 2>&1 | tee ci-logs/0-versions.txt
 
+      - name: Download ONNX Runtime and DirectML
+        id: ai_packages
+        run: |
+          set -o pipefail
+          mkdir -p build/packages
+          {
+            curl -sSfL -o build/packages/ort.nupkg \
+              https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime.DirectML/1.24.4 &&
+            curl -sSfL -o build/packages/dml.nupkg \
+              https://www.nuget.org/api/v2/package/Microsoft.AI.DirectML/1.15.4 &&
+            sha256sum build/packages/*.nupkg &&
+            7z x -y -obuild/packages/ort build/packages/ort.nupkg > /dev/null &&
+            7z x -y -obuild/packages/dml build/packages/dml.nupkg > /dev/null &&
+            ls build/packages/ort/runtimes/win-x64/native build/packages/dml/bin/x64-win &&
+            ls build/packages/ort build/packages/dml
+          } 2>&1 | tee ci-logs/0b-ai-packages.txt
+
       - name: Build C++ engine
         id: engine_build
         run: |
@@ -67,7 +84,9 @@ jobs:
             cmake -S engine -B build/engine \
               -DCMAKE_TOOLCHAIN_FILE="$VCPKG/scripts/buildsystems/vcpkg.cmake" \
               -DVCPKG_TARGET_TRIPLET=x64-windows-static-md \
-              -DCMAKE_INSTALL_PREFIX="$ROOT/engine/dist" &&
+              -DCMAKE_INSTALL_PREFIX="$ROOT/engine/dist" \
+              -DAIBS_ORT_DIR="$ROOT/build/packages/ort" \
+              -DAIBS_DML_DIR="$ROOT/build/packages/dml" &&
             cmake --build build/engine --config Release &&
             cmake --install build/engine --config Release
           } 2>&1 | tee ci-logs/1-engine-build.txt
@@ -169,6 +188,7 @@ jobs:
             echo "branch: $GITHUB_REF_NAME"
             echo "run:    $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             echo "job:    ${{ job.status }}"
+            echo "ai_packages:    ${{ steps.ai_packages.outcome }}"
             echo "engine_build:   ${{ steps.engine_build.outcome }}"
             echo "engine_test:    ${{ steps.engine_test.outcome }}"
             echo "npm_install:    ${{ steps.npm_install.outcome }}"
