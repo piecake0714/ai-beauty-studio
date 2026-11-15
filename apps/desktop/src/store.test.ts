@@ -641,4 +641,95 @@ describe("app store", () => {
     store.getState().receiveJobUpdate({ state: "finished", id: 7, result: { provider: "cpu" } });
     expect(store.getState().outdated).toEqual(["shape"]);
   });
+
+  it("adds, changes, orders and removes layers as undoable steps", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    await store.getState().openPath("C:\\a.jpg");
+    await store.getState().addLayer("adjustment", "A");
+    const first = store.getState().live.layers[0];
+    expect(first).toMatchObject({ name: "A", kind: "adjustment", blend: "normal", opacity: 100, visible: true });
+    expect(first.mask.start).toBe("none");
+    expect(store.getState().selectedLayer).toBe(first.id);
+    expect(store.getState().tool).toBe("brush");
+    await store.getState().addImageLayer("Images", "B");
+    expect(api.addBackgroundImage).toHaveBeenCalledWith("C:\\照片\\a.jpg");
+    const second = store.getState().live.layers[1];
+    expect(second).toMatchObject({ kind: "image", image: 1, blend: "soft-light" });
+    expect(second.mask.start).toBe("all");
+
+    // A live change is not a step until committed.
+    const calls = vi.mocked(api.commitAdjustments).mock.calls.length;
+    await store.getState().updateLayer(first.id, (l) => ({ ...l, opacity: 40 }), false);
+    expect(api.commitAdjustments).toHaveBeenCalledTimes(calls);
+    await store.getState().updateLayer(first.id, (l) => l, true);
+    expect(store.getState().edit?.adjustments.layers[0].opacity).toBe(40);
+
+    await store.getState().moveLayer(first.id, 1);
+    expect(store.getState().live.layers.map((l) => l.name)).toEqual(["B", "A"]);
+    await store.getState().removeLayer(first.id);
+    expect(store.getState().live.layers.map((l) => l.name)).toEqual(["B"]);
+    expect(store.getState().selectedLayer).toBeNull();
+    await store.getState().undo();
+    expect(store.getState().live.layers.map((l) => l.name)).toEqual(["B", "A"]);
+  });
+
+  it("paints brush and eraser strokes on the selected layer as one step each", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    await store.getState().openPath("C:\\a.jpg");
+    await store.getState().addLayer("adjustment", "A");
+    store.getState().setBrush({ size: 0.1, hardness: 80, opacity: 60 });
+    const calls = vi.mocked(api.commitAdjustments).mock.calls.length;
+    store.getState().beginStroke(5, 5);
+    store.getState().extendStroke(5.1, 5); // closer than the spacing: skipped
+    store.getState().extendStroke(10, 5);
+    store.getState().extendStroke(20, 10);
+    expect(api.commitAdjustments).toHaveBeenCalledTimes(calls);
+    await store.getState().endStroke();
+    expect(api.commitAdjustments).toHaveBeenCalledTimes(calls + 1);
+    const stroke = store.getState().edit!.adjustments.layers[0].mask.strokes[0];
+    // 10% of the longer side (40 px).
+    expect(stroke).toEqual({ points: [5, 5, 10, 5, 20, 10], size: 4, hardness: 80, opacity: 60, erase: false });
+
+    store.getState().setTool("eraser");
+    store.getState().beginStroke(1, 1);
+    await store.getState().endStroke();
+    expect(store.getState().live.layers[0].mask.strokes[1].erase).toBe(true);
+
+    // Without a selected layer, or with the move tool, nothing is painted.
+    store.getState().setTool("none");
+    store.getState().beginStroke(1, 1);
+    await store.getState().endStroke();
+    store.getState().setTool("brush");
+    store.getState().selectLayer(null);
+    store.getState().beginStroke(1, 1);
+    await store.getState().endStroke();
+    expect(store.getState().live.layers[0].mask.strokes).toHaveLength(2);
+  });
+
+  it("crops on apply, restores on cancel, and shows the whole photo while cropping", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    await store.getState().openPath("C:\\a.jpg");
+    expect(store.getState().bounds()).toEqual({ x: 0, y: 0, width: 40, height: 30 });
+    store.getState().startCrop();
+    store.getState().setCropLive({ x: 0.25, y: 0, width: 0.5, height: 1 });
+    expect(store.getState().bounds()).toEqual({ x: 0, y: 0, width: 40, height: 30 });
+    store.getState().cancelCrop();
+    expect(store.getState().tool).toBe("none");
+    expect(store.getState().live.crop).toEqual({ x: 0, y: 0, width: 1, height: 1 });
+
+    store.getState().startCrop();
+    store.getState().setCropLive({ x: 0.25, y: 0, width: 0.5, height: 1 });
+    await store.getState().applyCrop();
+    expect(store.getState().tool).toBe("none");
+    expect(store.getState().edit?.adjustments.crop).toEqual({ x: 0.25, y: 0, width: 0.5, height: 1 });
+    expect(store.getState().bounds()).toEqual({ x: 10, y: 0, width: 20, height: 30 });
+    // Outside the crop tool the crop is not changed by dragging.
+    store.getState().setCropLive({ x: 0, y: 0, width: 1, height: 1 });
+    expect(store.getState().live.crop.x).toBe(0.25);
+    await store.getState().undo();
+    expect(store.getState().live.crop).toEqual({ x: 0, y: 0, width: 1, height: 1 });
+  });
 });

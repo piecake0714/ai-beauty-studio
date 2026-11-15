@@ -808,7 +808,7 @@ mod tests {
         assert_eq!(a.clamped().background_blur, 100.0);
         assert_eq!(a.background_color, [1, 2, 3]);
         assert!(!a.is_identity());
-        assert_eq!(serde_json::to_value(a).unwrap()["backgroundMode"], "blur");
+        assert_eq!(serde_json::to_value(&a).unwrap()["backgroundMode"], "blur");
         // One-click enhancement keeps background choices.
         assert_eq!(a.with_colour(engine_sys::Adjustments::default()).background_mode, BackgroundSetting::Blur);
     }

@@ -413,7 +413,7 @@ mod tests {
         let (mw, mh) = (2048u32, 1536u32);
         let coverage: Vec<u8> = (0..mw * mh).map(|i| if (i % mw) > 600 && (i % mw) < 1450 { 255 } else { 0 }).collect();
         let matte = Matte::from_values(&coverage, mw, mh, w, h).unwrap();
-        let depth: Vec<f32> = (0..1024 * 768).map(|i| ((i % 1024) as f32 / 1024.0)).collect();
+        let depth: Vec<f32> = (0..1024 * 768).map(|i| (i % 1024) as f32 / 1024.0).collect();
         let shape = Shape::from_depth(&depth, 1024, 768, w, h).unwrap();
         let colour = engine_sys::Adjustments { exposure: 0.3, contrast: 20.0, ..Default::default() };
         let faces = [face];

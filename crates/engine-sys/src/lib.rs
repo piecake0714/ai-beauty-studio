@@ -1317,7 +1317,7 @@ mod tests {
     fn light_brightens_near_it_and_follows_a_shape() {
         let source = Source::open(PNG).unwrap();
         let plain = source.render(0.0, 0.0, 64.0, 48.0, 64, 48).unwrap();
-        let depth: Vec<f32> = (0..64 * 48).map(|i| ((i % 64) as f32 / 64.0)).collect();
+        let depth: Vec<f32> = (0..64 * 48).map(|i| (i % 64) as f32 / 64.0).collect();
         let shape = Shape::from_depth(&depth, 64, 48, 64, 48).unwrap();
         let light = Light {
             kind: LightKind::Softbox,

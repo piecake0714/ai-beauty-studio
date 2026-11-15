@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adjustmentsKey, fromHex, hasHiddenInBeginner, isIdentity, sameAdjustments, toHex, withBackground, withBand, withLightKind, withScalar } from "./adjustments";
+import { adjustmentsKey, cropRect, dragCrop, fitCropToRatio, fromHex, withLayer, withLayerMoved, withNewLayer, withoutLayer, hasHiddenInBeginner, isIdentity, sameAdjustments, toHex, withBackground, withBand, withLightKind, withScalar } from "./adjustments";
 import { NO_ADJUSTMENTS } from "./types";
 
 describe("adjustment helpers", () => {
@@ -64,5 +64,61 @@ describe("adjustment helpers", () => {
     expect(withLightKind(moved, "softbox").lightX).toBe(0.9);
     expect(sameAdjustments(moved, on)).toBe(false);
     expect(withLightKind(on, "none").lightKind).toBe("none");
+  });
+
+  it("turns a crop into whole source pixels inside the photo", () => {
+    const size = { width: 40, height: 30 };
+    expect(cropRect(undefined, size)).toEqual({ x: 0, y: 0, width: 40, height: 30 });
+    expect(cropRect({ x: 0.26, y: 0.25, width: 0.5, height: 0.5 }, size)).toEqual({ x: 10, y: 7, width: 21, height: 16 });
+    expect(cropRect({ x: 1, y: 1, width: 0, height: 0 }, size)).toEqual({ x: 39, y: 29, width: 1, height: 1 });
+  });
+
+  it("fits a crop to an aspect ratio inside the current crop", () => {
+    const size = { width: 400, height: 300 };
+    const square = fitCropToRatio({ x: 0, y: 0, width: 1, height: 1 }, 1, size);
+    expect(square.width * 400).toBeCloseTo(300);
+    expect(square.height * 300).toBeCloseTo(300);
+    expect(square.x * 400).toBeCloseTo(50);
+    // "Original" on a portrait photo keeps the photo's own shape.
+    const tall = { width: 300, height: 400 };
+    const same = fitCropToRatio({ x: 0, y: 0, width: 1, height: 1 }, 300 / 400, tall);
+    expect(same.width).toBeCloseTo(1);
+    expect(same.height).toBeCloseTo(1);
+    // 4:3 on a portrait crop becomes 3:4.
+    const portrait = fitCropToRatio({ x: 0, y: 0, width: 1, height: 1 }, 4 / 3, tall);
+    expect((portrait.width * 300) / (portrait.height * 400)).toBeCloseTo(3 / 4);
+  });
+
+  it("drags crop edges and corners inside the photo, keeping a ratio when asked", () => {
+    const size = { width: 400, height: 300 };
+    const start = { x: 100, y: 100, width: 100, height: 100 };
+    expect(dragCrop(start, "move", 500, -500, null, size)).toEqual({ x: 300, y: 0, width: 100, height: 100 });
+    expect(dragCrop(start, "e", 50, 0, null, size)).toEqual({ x: 100, y: 100, width: 150, height: 100 });
+    expect(dragCrop(start, "w", 500, 0, null, size).width).toBe(16);
+    expect(dragCrop(start, "nw", -500, -500, null, size)).toEqual({ x: 0, y: 0, width: 200, height: 200 });
+    const wide = dragCrop(start, "se", 100, 0, 2, size);
+    expect(wide.width / wide.height).toBeCloseTo(2);
+    expect(wide.x).toBe(100);
+    const capped = dragCrop(start, "se", 1000, 0, 2, size);
+    expect(capped.x + capped.width).toBeLessThanOrEqual(400);
+    expect(capped.width / capped.height).toBeCloseTo(2);
+  });
+
+  it("adds, changes, moves and removes layers", () => {
+    let a = withNewLayer(NO_ADJUSTMENTS, "adjustment", "A");
+    a = withNewLayer(a, "image", "B", 2);
+    expect(a.layers.map((l) => [l.id, l.name, l.image])).toEqual([
+      [1, "A", 0],
+      [2, "B", 2],
+    ]);
+    a = withLayer(a, 1, (l) => ({ ...l, opacity: 30 }));
+    expect(a.layers[0].opacity).toBe(30);
+    expect(withLayerMoved(a, 2, 1)).toBe(a);
+    a = withLayerMoved(a, 1, 1);
+    expect(a.layers.map((l) => l.id)).toEqual([2, 1]);
+    a = withoutLayer(a, 2);
+    expect(withNewLayer(a, "adjustment", "C").layers[1].id).toBe(2);
+    expect(adjustmentsKey(a)).not.toBe(adjustmentsKey(NO_ADJUSTMENTS));
+    expect(NO_ADJUSTMENTS.layers).toEqual([]);
   });
 });
