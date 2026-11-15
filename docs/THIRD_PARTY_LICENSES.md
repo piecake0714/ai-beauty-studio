@@ -76,3 +76,6 @@ Rust 工具鏈、CMake、vcpkg、Node.js、npm、TypeScript、Vite、Vitest、@t
 CI 以 `scripts/build_notices.py` 產生 `THIRD_PARTY_NOTICES.txt`，內含所有出貨元件的授權全文，隨安裝程式出貨，並可在「設定 → 關於 → 第三方授權聲明」檢視。任何出貨元件缺少授權文字時，建置會失敗。
 
 尚未完成：Microsoft WebView2 bootstrapper 的散布條款尚未逐條核對。
+
+
+專案檔使用 Rust 的 `zip` crate（MIT），只用不壓縮的儲存模式，不需要另外的壓縮函式庫；授權已由 cargo-about 收入聲明檔。
