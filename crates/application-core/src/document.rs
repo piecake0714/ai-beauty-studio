@@ -10,33 +10,58 @@ use serde::{Deserialize, Serialize};
 /// Most history steps kept; the oldest are dropped beyond this.
 pub const MAX_HISTORY: usize = 500;
 
-/// Tone adjustments. All zero leaves the image unchanged.
+pub use engine_sys::HSL_BANDS;
+
+/// Light and colour adjustments. All zero leaves the image unchanged.
+/// Exposure is in stops (EV), -5 to +5; every other value is -100 to +100.
+/// HSL arrays are per colour band: red, orange, yellow, green, aqua, blue,
+/// purple, magenta. Missing fields read as zero, so older saved data loads.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Adjustments {
-    /// Stops (EV), -5 to +5.
     pub exposure: f32,
-    /// -100 to +100.
     pub brightness: f32,
-    /// -100 to +100.
     pub contrast: f32,
+    pub highlights: f32,
+    pub shadows: f32,
+    pub whites: f32,
+    pub blacks: f32,
+    pub temperature: f32,
+    pub tint: f32,
+    pub vibrance: f32,
+    pub saturation: f32,
+    pub hsl_hue: [f32; HSL_BANDS],
+    pub hsl_saturation: [f32; HSL_BANDS],
+    pub hsl_luminance: [f32; HSL_BANDS],
+}
+
+fn fix(value: f32, limit: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(-limit, limit)
+    } else {
+        0.0
+    }
 }
 
 impl Adjustments {
     /// The same adjustments with every value inside its allowed range and
     /// non-numbers replaced by zero.
     pub fn clamped(self) -> Adjustments {
-        fn fix(value: f32, limit: f32) -> f32 {
-            if value.is_finite() {
-                value.clamp(-limit, limit)
-            } else {
-                0.0
-            }
-        }
         Adjustments {
             exposure: fix(self.exposure, 5.0),
             brightness: fix(self.brightness, 100.0),
             contrast: fix(self.contrast, 100.0),
+            highlights: fix(self.highlights, 100.0),
+            shadows: fix(self.shadows, 100.0),
+            whites: fix(self.whites, 100.0),
+            blacks: fix(self.blacks, 100.0),
+            temperature: fix(self.temperature, 100.0),
+            tint: fix(self.tint, 100.0),
+            vibrance: fix(self.vibrance, 100.0),
+            saturation: fix(self.saturation, 100.0),
+            hsl_hue: self.hsl_hue.map(|v| fix(v, 100.0)),
+            hsl_saturation: self.hsl_saturation.map(|v| fix(v, 100.0)),
+            hsl_luminance: self.hsl_luminance.map(|v| fix(v, 100.0)),
         }
     }
 
@@ -50,6 +75,17 @@ impl Adjustments {
             exposure: a.exposure,
             brightness: a.brightness,
             contrast: a.contrast,
+            highlights: a.highlights,
+            shadows: a.shadows,
+            whites: a.whites,
+            blacks: a.blacks,
+            temperature: a.temperature,
+            tint: a.tint,
+            vibrance: a.vibrance,
+            saturation: a.saturation,
+            hsl_hue: a.hsl_hue,
+            hsl_saturation: a.hsl_saturation,
+            hsl_luminance: a.hsl_luminance,
         }
     }
 }
@@ -138,6 +174,7 @@ mod tests {
             exposure,
             brightness,
             contrast,
+            ..Default::default()
         }
     }
 
@@ -191,8 +228,19 @@ mod tests {
     #[test]
     fn values_are_clamped_and_non_numbers_ignored() {
         let mut history = History::default();
-        history.commit(adj(9.0, -500.0, f32::NAN));
-        assert_eq!(history.current(), adj(5.0, -100.0, 0.0));
+        let mut wild = adj(9.0, -500.0, f32::NAN);
+        wild.temperature = 250.0;
+        wild.hsl_luminance[7] = f32::INFINITY;
+        history.commit(wild);
+        let mut expected = adj(5.0, -100.0, 0.0);
+        expected.temperature = 100.0;
+        assert_eq!(history.current(), expected);
+    }
+
+    #[test]
+    fn older_data_without_new_fields_still_loads() {
+        let loaded: Adjustments = serde_json::from_str(r#"{"exposure":1.5,"contrast":-20}"#).unwrap();
+        assert_eq!(loaded, adj(1.5, 0.0, -20.0));
     }
 
     #[test]
@@ -220,10 +268,17 @@ mod tests {
 
     #[test]
     fn json_uses_the_names_the_ui_expects() {
-        let json = serde_json::to_string(&History::default().state()).unwrap();
-        assert_eq!(
-            json,
-            r#"{"adjustments":{"exposure":0.0,"brightness":0.0,"contrast":0.0},"canUndo":false,"canRedo":false,"edited":false}"#
-        );
+        let json = serde_json::to_value(History::default().state()).unwrap();
+        let adjustments = json["adjustments"].as_object().unwrap();
+        let keys: Vec<&str> = adjustments.keys().map(String::as_str).collect();
+        for key in [
+            "exposure", "brightness", "contrast", "highlights", "shadows", "whites", "blacks",
+            "temperature", "tint", "vibrance", "saturation", "hslHue", "hslSaturation", "hslLuminance",
+        ] {
+            assert!(keys.contains(&key), "missing {key}");
+        }
+        assert_eq!(adjustments["hslHue"].as_array().unwrap().len(), 8);
+        assert_eq!(json["canUndo"], false);
+        assert_eq!(json["edited"], false);
     }
 }

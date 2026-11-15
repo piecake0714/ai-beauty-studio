@@ -10,9 +10,14 @@ export function StoreProvider({ store, children }: { store: AppStore; children: 
 }
 
 export function useApp<T>(selector: (state: AppState) => T): T {
+  return useStore(useAppStore(), selector);
+}
+
+/** The store itself, for reading the newest state inside event handlers. */
+export function useAppStore(): AppStore {
   const store = useContext(StoreContext);
   if (!store) throw new Error("useApp must be used inside StoreProvider");
-  return useStore(store, selector);
+  return store;
 }
 
 export type Translate = (key: MessageKey, values?: Record<string, string | number>) => string;

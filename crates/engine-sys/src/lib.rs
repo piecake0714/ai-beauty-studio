@@ -44,28 +44,43 @@ extern "C" {
         original_columns: u32,
         out: *mut AibsImage,
     ) -> i32;
-    fn aibs_adjustments_lut(adjustments: *const Adjustments, lut: *mut u8) -> i32;
+    fn aibs_adjust_rgb8(adjustments: *const Adjustments, input: *const u8, output: *mut u8, pixel_count: usize) -> i32;
     fn aibs_source_free(source: *mut AibsSourceRaw);
 }
 
-/// Tone adjustments, matching `aibs_adjustments`. All zero leaves the image
-/// unchanged. Ranges: exposure -5..5 EV, brightness and contrast -100..100;
-/// the engine clamps values outside them.
+/// Number of HSL colour bands: red, orange, yellow, green, aqua, blue,
+/// purple, magenta.
+pub const HSL_BANDS: usize = 8;
+
+/// Light and colour adjustments, matching `aibs_adjustments`. All zero
+/// leaves the image unchanged. Exposure is -5..5 EV; everything else
+/// -100..100. The engine clamps values outside those ranges.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Adjustments {
     pub exposure: f32,
     pub brightness: f32,
     pub contrast: f32,
+    pub highlights: f32,
+    pub shadows: f32,
+    pub whites: f32,
+    pub blacks: f32,
+    pub temperature: f32,
+    pub tint: f32,
+    pub vibrance: f32,
+    pub saturation: f32,
+    pub hsl_hue: [f32; HSL_BANDS],
+    pub hsl_saturation: [f32; HSL_BANDS],
+    pub hsl_luminance: [f32; HSL_BANDS],
 }
 
-/// The 8-bit output for each 8-bit input value under `adjustments`.
-pub fn adjustments_lut(adjustments: &Adjustments) -> [u8; 256] {
-    let mut lut = [0u8; 256];
-    // SAFETY: both pointers are valid; the engine writes exactly 256 bytes.
-    let status = unsafe { aibs_adjustments_lut(adjustments, lut.as_mut_ptr()) };
+/// Apply adjustments to packed 8-bit RGB pixels exactly as rendering does.
+pub fn adjust_rgb8(adjustments: &Adjustments, rgb: &mut [u8]) {
+    let count = rgb.len() / 3;
+    // SAFETY: `rgb` holds at least `count * 3` bytes; the engine reads and
+    // writes exactly that many and allows input and output to be the same.
+    let status = unsafe { aibs_adjust_rgb8(adjustments, rgb.as_ptr(), rgb.as_mut_ptr(), count) };
     debug_assert_eq!(status, AIBS_OK);
-    lut
 }
 
 /// Opaque engine type behind `aibs_source*`.
@@ -348,25 +363,27 @@ mod tests {
     }
 
     #[test]
-    fn adjustments_follow_the_lut_and_respect_the_split() {
+    fn adjustments_match_adjust_rgb8_and_respect_the_split() {
         let source = Source::open(PNG).unwrap();
         let original = source.render(0.0, 0.0, 64.0, 48.0, 64, 48).unwrap();
         let zero = Adjustments::default();
-        assert_eq!(adjustments_lut(&zero), std::array::from_fn::<u8, 256, _>(|i| i as u8));
         let unchanged = source
             .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, Some(&zero), 0)
             .unwrap();
         assert_eq!(unchanged.pixels, original.pixels);
 
-        let darker = Adjustments { exposure: -1.0, brightness: 0.0, contrast: 0.0 };
-        let lut = adjustments_lut(&darker);
+        let mut look = Adjustments { exposure: -1.0, saturation: 40.0, ..Default::default() };
+        look.hsl_hue[0] = 50.0;
         let split = source
-            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, Some(&darker), 32)
+            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, Some(&look), 32)
             .unwrap();
         for col in [0usize, 31, 32, 63] {
             let p = (10 * 64 + col) * 4;
-            let expected = if col < 32 { original.pixels[p] } else { lut[original.pixels[p] as usize] };
-            assert_eq!(split.pixels[p], expected, "column {col}");
+            let mut expected = [original.pixels[p], original.pixels[p + 1], original.pixels[p + 2]];
+            if col >= 32 {
+                adjust_rgb8(&look, &mut expected);
+            }
+            assert_eq!(&split.pixels[p..p + 3], &expected, "column {col}");
         }
     }
 

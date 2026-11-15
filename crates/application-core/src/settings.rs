@@ -35,6 +35,15 @@ pub enum LanguagePreference {
     En,
 }
 
+/// Beginner mode shows the most-used adjustments; advanced shows all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum EditorMode {
+    #[default]
+    Beginner,
+    Advanced,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecentFile {
@@ -48,6 +57,7 @@ pub struct RecentFile {
 pub struct Settings {
     pub theme: ThemePreference,
     pub language: LanguagePreference,
+    pub editor_mode: EditorMode,
     pub recent: Vec<RecentFile>,
 }
 
@@ -169,6 +179,7 @@ mod tests {
         let mut settings = Settings {
             theme: ThemePreference::Dark,
             language: LanguagePreference::ZhHant,
+            editor_mode: EditorMode::Advanced,
             recent: Vec::new(),
         };
         settings.add_recent("C:\\照片\\一.jpg", 100);
@@ -197,6 +208,7 @@ mod tests {
         let loaded = load(&path);
         assert_eq!(loaded.settings.theme, ThemePreference::Light);
         assert_eq!(loaded.settings.language, LanguagePreference::System);
+        assert_eq!(loaded.settings.editor_mode, EditorMode::Beginner);
         assert!(!loaded.recovered_from_damage);
     }
 
@@ -205,6 +217,7 @@ mod tests {
         let settings = Settings {
             theme: ThemePreference::Dark,
             language: LanguagePreference::ZhHant,
+            editor_mode: EditorMode::Advanced,
             recent: vec![RecentFile {
                 path: "a.jpg".into(),
                 opened_at: 5,
@@ -213,7 +226,7 @@ mod tests {
         let json = serde_json::to_string(&settings).unwrap();
         assert_eq!(
             json,
-            r#"{"theme":"dark","language":"zh-Hant","recent":[{"path":"a.jpg","openedAt":5}]}"#
+            r#"{"theme":"dark","language":"zh-Hant","editorMode":"advanced","recent":[{"path":"a.jpg","openedAt":5}]}"#
         );
     }
 

@@ -172,7 +172,69 @@ void test_large_image() {
         }
         std::printf("timing: render %s took %.1f ms\n", c.name, render_ms);
     }
+    aibs_adjustments every{};
+    every.exposure = 0.5f;
+    every.brightness = 10;
+    every.contrast = 20;
+    every.highlights = -40;
+    every.shadows = 30;
+    every.whites = 10;
+    every.blacks = -10;
+    every.temperature = 20;
+    every.tint = 5;
+    every.vibrance = 30;
+    every.saturation = 10;
+    for (int i = 0; i < AIBS_HSL_BANDS; ++i) {
+        every.hsl_hue[i] = 10;
+        every.hsl_saturation[i] = -10;
+        every.hsl_luminance[i] = 5;
+    }
+    start = std::chrono::steady_clock::now();
+    Image adjusted;
+    CHECK(aibs_source_render(source.ptr, 3000, 2000, 1920, 1080, 1920, 1080, &every, 0, &adjusted.img) == AIBS_OK);
+    std::printf("timing: render 100%% 1920x1080 with every adjustment took %.1f ms\n", ms_since(start));
     std::printf("timing: open 48 MP JPEG took %.1f ms\n", open_ms);
+}
+
+void test_render_adjusts_right_of_the_split() {
+    Source source;
+    CHECK(open_fixture(source));
+    Image original;
+    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 64, 48, nullptr, 0, &original.img) == AIBS_OK);
+
+    const aibs_adjustments none{};
+    Image unchanged;
+    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 64, 48, &none, 0, &unchanged.img) == AIBS_OK);
+    bool same = original.img.data != nullptr && unchanged.img.data != nullptr;
+    for (size_t i = 0; same && i < 64u * 48u * 4u; ++i) same = original.img.data[i] == unchanged.img.data[i];
+    CHECK(same);
+
+    aibs_adjustments look{};
+    look.exposure = 0.7f;
+    look.contrast = 20;
+    look.shadows = 40;
+    look.temperature = 30;
+    look.saturation = 25;
+    look.hsl_hue[5] = 40;
+    Image split;
+    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 64, 48, &look, 30, &split.img) == AIBS_OK);
+    bool correct = original.img.data != nullptr && split.img.data != nullptr;
+    for (int row = 0; correct && row < 48; ++row) {
+        for (int col = 0; col < 64; ++col) {
+            const size_t p = (static_cast<size_t>(row) * 64 + col) * 4;
+            uint8_t expected[3] = {original.img.data[p], original.img.data[p + 1], original.img.data[p + 2]};
+            if (col >= 30) CHECK(aibs_adjust_rgb8(&look, expected, expected, 1) == AIBS_OK);
+            for (int c = 0; c < 3; ++c) correct = correct && split.img.data[p + c] == expected[c];
+            correct = correct && split.img.data[p + 3] == 255;
+        }
+    }
+    CHECK(correct);
+
+    Image all_original;
+    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 64, 48, &look, 1000, &all_original.img) == AIBS_OK);
+    same = original.img.data != nullptr && all_original.img.data != nullptr;
+    for (size_t i = 0; same && i < 64u * 48u * 4u; ++i) same = original.img.data[i] == all_original.img.data[i];
+    CHECK(same);
 }
 
 }  // namespace
@@ -184,5 +246,6 @@ void run_source_tests() {
     test_area_outside_the_image_is_transparent();
     test_render_reduced();
     test_invalid_render_arguments();
+    test_render_adjusts_right_of_the_split();
     test_large_image();
 }

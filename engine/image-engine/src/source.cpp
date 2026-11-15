@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <opencv2/core.hpp>
+#include <opencv2/core/utility.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -126,12 +127,18 @@ int32_t aibs_source_render(const aibs_source* source,
                        (enlarging ? cv::INTER_NEAREST : cv::INTER_LINEAR) | cv::WARP_INVERSE_MAP,
                        cv::BORDER_REPLICATE);
 
-        // Adjust everything right of the before/after split.
-        if (adjustments != nullptr && !aibs::is_identity(*adjustments) && original_columns < out_width) {
-            const cv::Mat lut = aibs::build_lut(*adjustments);
-            const int first = static_cast<int>(original_columns);
-            cv::Mat adjusted = bgr.colRange(first, bgr.cols);
-            cv::LUT(adjusted, lut, adjusted);
+        // Adjust everything right of the before/after split, rows in parallel.
+        if (adjustments != nullptr && original_columns < out_width) {
+            const aibs::Pipeline pipeline(*adjustments);
+            if (!pipeline.identity()) {
+                const int first = static_cast<int>(original_columns);
+                const int count = bgr.cols - first;
+                cv::parallel_for_(cv::Range(0, bgr.rows), [&](const cv::Range& rows) {
+                    for (int row = rows.start; row < rows.end; ++row) {
+                        pipeline.apply_bgr(bgr.ptr<uint8_t>(row) + 3 * first, count);
+                    }
+                });
+            }
         }
 
         cv::Mat rgba;

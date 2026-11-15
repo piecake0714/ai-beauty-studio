@@ -2,6 +2,7 @@ import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react
 import { errorCode, type RenderRequest } from "../api";
 import { useApp, useI18n } from "../context";
 import { parseFrame, type Frame } from "../frame";
+import { adjustmentsKey } from "../adjustments";
 import type { Adjustments } from "../types";
 import { placeFrame, sameCamera, visibleRegion, type Camera, type Size } from "../view";
 
@@ -26,7 +27,7 @@ function frameToCanvas(frame: Frame): HTMLCanvasElement {
 }
 
 function lookKey(adjustments: Adjustments, originalColumns: number): string {
-  return `${adjustments.exposure}|${adjustments.brightness}|${adjustments.contrast}|${originalColumns}`;
+  return `${adjustmentsKey(adjustments)}|${originalColumns}`;
 }
 
 function sameViewport(a: Size, b: Size): boolean {

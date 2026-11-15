@@ -4,6 +4,7 @@ import { parseFrame, type Frame } from "./frame";
 import {
   NO_ADJUSTMENTS,
   type Adjustments,
+  type EditorMode,
   type EditState,
   type FileInfo,
   type LanguagePreference,
@@ -80,6 +81,7 @@ export interface AppState {
   showView(view: View): void;
   setTheme(theme: ThemePreference): Promise<void>;
   setLanguage(language: LanguagePreference): Promise<void>;
+  setEditorMode(mode: EditorMode): Promise<void>;
   removeRecent(path: string): Promise<void>;
   clearRecent(): Promise<void>;
   dismissError(): void;
@@ -108,7 +110,7 @@ export interface AppState {
   originalColumns(outWidth: number): number;
 }
 
-export const defaultSettings: Settings = { theme: "system", language: "system", recent: [] };
+export const defaultSettings: Settings = { theme: "system", language: "system", editorMode: "beginner", recent: [] };
 
 export function createAppStore(api: Api) {
   let nextDocumentId = 1;
@@ -219,6 +221,7 @@ export function createAppStore(api: Api) {
 
       setTheme: (theme) => changeSettings(() => api.setTheme(theme), { theme }),
       setLanguage: (language) => changeSettings(() => api.setLanguage(language), { language }),
+      setEditorMode: (editorMode) => changeSettings(() => api.setEditorMode(editorMode), { editorMode }),
       removeRecent: (path) => changeSettings(() => api.removeRecent(path)),
       clearRecent: () => changeSettings(() => api.clearRecent()),
       dismissError: () => set({ error: null }),

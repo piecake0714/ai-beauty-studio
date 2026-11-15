@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use application_core::document::{Adjustments, EditState, History};
 use application_core::info::{self, FileInfo};
-use application_core::settings::{self, LanguagePreference, Settings, ThemePreference};
+use application_core::settings::{self, EditorMode, LanguagePreference, Settings, ThemePreference};
 use application_core::{EngineError, Source};
 use tauri::ipc::Response;
 use tauri::path::BaseDirectory;
@@ -281,6 +281,11 @@ fn set_language(language: LanguagePreference, state: State<'_, AppState>) -> Res
 }
 
 #[tauri::command]
+fn set_editor_mode(mode: EditorMode, state: State<'_, AppState>) -> Result<Settings, String> {
+    state.update(|s| s.editor_mode = mode)
+}
+
+#[tauri::command]
 fn remove_recent(path: String, state: State<'_, AppState>) -> Result<Settings, String> {
     state.update(|s| s.remove_recent(&path))
 }
@@ -329,6 +334,7 @@ fn main() {
             file_info,
             set_theme,
             set_language,
+            set_editor_mode,
             remove_recent,
             clear_recent,
             third_party_notices,

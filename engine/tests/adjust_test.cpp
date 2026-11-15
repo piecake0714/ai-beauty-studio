@@ -1,128 +1,197 @@
-// Tests for tone adjustments and their use in rendering.
+// Tests for the light and colour adjustments (pixel pipeline only).
 #include "aibs/engine.h"
 #include "check.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 
 namespace {
+
+struct Rgb {
+    int r, g, b;
+};
+
+Rgb adjust(const aibs_adjustments& a, Rgb in) {
+    const uint8_t px[3] = {static_cast<uint8_t>(in.r), static_cast<uint8_t>(in.g), static_cast<uint8_t>(in.b)};
+    uint8_t out[3] = {0, 0, 0};
+    CHECK(aibs_adjust_rgb8(&a, px, out, 1) == AIBS_OK);
+    return {out[0], out[1], out[2]};
+}
+
+int grey(const aibs_adjustments& a, int v) {
+    return adjust(a, {v, v, v}).g;
+}
 
 double srgb_to_linear(double v) {
     return v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
 }
 
-bool lut_of(aibs_adjustments a, uint8_t* lut) {
-    return aibs_adjustments_lut(&a, lut) == AIBS_OK;
+int chroma(Rgb c) {
+    return std::max({c.r, c.g, c.b}) - std::min({c.r, c.g, c.b});
 }
 
-void test_zero_adjustments_change_nothing() {
-    uint8_t lut[256];
-    CHECK(lut_of({0, 0, 0}, lut));
-    bool identity = true;
-    for (int i = 0; i < 256; ++i) identity = identity && lut[i] == i;
-    CHECK(identity);
+aibs_adjustments none() {
+    return aibs_adjustments{};
+}
 
-    // Non-finite input is treated as zero.
-    const float nan = std::numeric_limits<float>::quiet_NaN();
-    CHECK(lut_of({nan, nan, nan}, lut));
-    identity = true;
-    for (int i = 0; i < 256; ++i) identity = identity && lut[i] == i;
-    CHECK(identity);
+void test_all_zero_changes_nothing() {
+    std::vector<uint8_t> in(256 * 256 * 3);
+    for (size_t i = 0; i < in.size(); ++i) in[i] = static_cast<uint8_t>((i * 7919) % 256);
+    std::vector<uint8_t> out(in.size());
+    const aibs_adjustments a = none();
+    CHECK(aibs_adjust_rgb8(&a, in.data(), out.data(), in.size() / 3) == AIBS_OK);
+    CHECK(out == in);
+
+    aibs_adjustments nan = none();
+    nan.exposure = nan.saturation = nan.hsl_hue[0] = std::numeric_limits<float>::quiet_NaN();
+    CHECK(aibs_adjust_rgb8(&nan, in.data(), out.data(), in.size() / 3) == AIBS_OK);
+    CHECK(out == in);
+
+    CHECK(aibs_adjust_rgb8(nullptr, in.data(), out.data(), 1) == AIBS_ERR_INVALID_ARGUMENT);
 }
 
 void test_exposure_plus_one_doubles_linear_light() {
-    uint8_t lut[256];
-    CHECK(lut_of({1, 0, 0}, lut));
-    for (int i = 60; i <= 186; i += 7) {
-        const double ratio = srgb_to_linear(lut[i] / 255.0) / srgb_to_linear(i / 255.0);
+    aibs_adjustments a = none();
+    a.exposure = 1;
+    for (int v = 60; v <= 186; v += 7) {
+        const double ratio = srgb_to_linear(grey(a, v) / 255.0) / srgb_to_linear(v / 255.0);
         CHECK(std::abs(ratio - 2.0) < 0.05);
     }
-    CHECK(lut[0] == 0 && lut[255] == 255);
+    CHECK(grey(a, 0) == 0 && grey(a, 255) == 255);
 }
 
-void test_curves_are_monotonic_and_limited() {
-    const aibs_adjustments settings[] = {
-        {2, 0, 0}, {-2, 0, 0}, {0, 60, 0}, {0, -60, 0}, {0, 0, 80}, {0, 0, -50}, {1, -30, 40},
+void test_grey_ramps_stay_in_order() {
+    const auto make = [](float aibs_adjustments::*field, float value) {
+        aibs_adjustments a = none();
+        a.*field = value;
+        return a;
     };
-    for (const aibs_adjustments& a : settings) {
-        uint8_t lut[256];
-        CHECK(lut_of(a, lut));
-        bool monotonic = true;
-        for (int i = 1; i < 256; ++i) monotonic = monotonic && lut[i] >= lut[i - 1];
-        CHECK(monotonic);
+    const aibs_adjustments cases[] = {
+        make(&aibs_adjustments::exposure, 2),       make(&aibs_adjustments::exposure, -2),
+        make(&aibs_adjustments::brightness, 60),    make(&aibs_adjustments::contrast, 80),
+        make(&aibs_adjustments::contrast, -50),     make(&aibs_adjustments::highlights, -100),
+        make(&aibs_adjustments::highlights, 100),   make(&aibs_adjustments::shadows, 100),
+        make(&aibs_adjustments::shadows, -100),     make(&aibs_adjustments::whites, 100),
+        make(&aibs_adjustments::whites, -100),      make(&aibs_adjustments::blacks, 100),
+        make(&aibs_adjustments::blacks, -100),      make(&aibs_adjustments::temperature, 80),
+        make(&aibs_adjustments::tint, -80),         make(&aibs_adjustments::saturation, 100),
+    };
+    for (const aibs_adjustments& a : cases) {
+        int previous[3] = {0, 0, 0};
+        bool ordered = true;
+        for (int v = 0; v < 256; ++v) {
+            const Rgb out = adjust(a, {v, v, v});
+            ordered = ordered && out.r >= previous[0] && out.g >= previous[1] && out.b >= previous[2];
+            previous[0] = out.r;
+            previous[1] = out.g;
+            previous[2] = out.b;
+        }
+        CHECK(ordered);
     }
-
-    uint8_t lut[256];
-    CHECK(lut_of({0, 100, 0}, lut));
-    CHECK(lut[0] == 0 && lut[255] == 255 && lut[128] > 128);  // brightness keeps black and white
-    CHECK(lut_of({0, 0, -100}, lut));
-    CHECK(lut[0] == 128 && lut[255] == 128);  // no contrast: flat middle grey
-
-    uint8_t clamped[256];
-    CHECK(lut_of({50, 0, 0}, lut));
-    CHECK(lut_of({5, 0, 0}, clamped));
-    bool same = true;
-    for (int i = 0; i < 256; ++i) same = same && lut[i] == clamped[i];
-    CHECK(same);  // out-of-range exposure is clamped to +5
-
-    CHECK(aibs_adjustments_lut(nullptr, lut) == AIBS_ERR_INVALID_ARGUMENT);
 }
 
-struct Source {
-    aibs_source* ptr = nullptr;
-    ~Source() { aibs_source_free(ptr); }
-};
+void test_brightness_and_contrast() {
+    aibs_adjustments a = none();
+    a.brightness = 100;
+    CHECK(grey(a, 0) == 0 && grey(a, 255) == 255 && grey(a, 128) > 150);
+    a = none();
+    a.contrast = -100;
+    CHECK(grey(a, 0) == 128 && grey(a, 255) == 128);
+    a.contrast = 50;
+    CHECK(grey(a, 64) < 64 && grey(a, 192) > 192);
+}
 
-struct Image {
-    aibs_image img{};
-    ~Image() { aibs_image_free(&img); }
-};
+void test_tone_controls_act_on_their_range() {
+    aibs_adjustments a = none();
+    a.highlights = -100;
+    CHECK(std::abs(grey(a, 220) - 220) > 2 * std::abs(grey(a, 40) - 40));
+    CHECK(grey(a, 220) < 220);
 
-void test_render_applies_adjustments_right_of_the_split() {
-    const std::vector<uint8_t> bytes = read_fixture("gradient_64x48.png");
-    Source source;
-    CHECK(aibs_source_open(bytes.data(), bytes.size(), &source.ptr) == AIBS_OK);
+    a = none();
+    a.shadows = 100;
+    CHECK(grey(a, 40) - 40 > 2 * std::abs(grey(a, 220) - 220));
 
-    Image original;
-    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 64, 48, nullptr, 0, &original.img) == AIBS_OK);
+    a = none();
+    a.whites = 100;
+    CHECK(grey(a, 230) - 230 > 2 * std::abs(grey(a, 30) - 30));
 
-    const aibs_adjustments none{0, 0, 0};
-    Image unchanged;
-    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 64, 48, &none, 0, &unchanged.img) == AIBS_OK);
-    bool same = original.img.data != nullptr && unchanged.img.data != nullptr;
-    for (size_t i = 0; same && i < 64u * 48u * 4u; ++i) same = original.img.data[i] == unchanged.img.data[i];
-    CHECK(same);
+    a = none();
+    a.blacks = -100;
+    CHECK(20 - grey(a, 20) > 2 * std::abs(grey(a, 200) - 200));
 
-    const aibs_adjustments brighter{1, 10, 20};
-    uint8_t lut[256];
-    CHECK(aibs_adjustments_lut(&brighter, lut) == AIBS_OK);
-    Image split;
-    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 64, 48, &brighter, 30, &split.img) == AIBS_OK);
-    bool correct = original.img.data != nullptr && split.img.data != nullptr;
-    for (int row = 0; correct && row < 48; ++row) {
-        for (int col = 0; col < 64; ++col) {
-            const size_t p = (static_cast<size_t>(row) * 64 + col) * 4;
-            for (int c = 0; c < 3; ++c) {
-                const uint8_t expected = col < 30 ? original.img.data[p + c] : lut[original.img.data[p + c]];
-                if (split.img.data[p + c] != expected) correct = false;
-            }
-            if (split.img.data[p + 3] != 255) correct = false;
-        }
-    }
-    CHECK(correct);
+    // Hue is kept: a coloured pixel changes brightness, not colour order.
+    a = none();
+    a.shadows = 100;
+    const Rgb out = adjust(a, {80, 40, 20});
+    CHECK(out.r > out.g && out.g > out.b && out.r > 80);
+}
 
-    Image all_original;
-    CHECK(aibs_source_render(source.ptr, 0, 0, 64, 48, 64, 48, &brighter, 1000, &all_original.img) == AIBS_OK);
-    same = original.img.data != nullptr && all_original.img.data != nullptr;
-    for (size_t i = 0; same && i < 64u * 48u * 4u; ++i) same = original.img.data[i] == all_original.img.data[i];
-    CHECK(same);
+void test_white_balance() {
+    aibs_adjustments a = none();
+    a.temperature = 50;
+    Rgb out = adjust(a, {128, 128, 128});
+    CHECK(out.r > out.b + 10);
+    a.temperature = -50;
+    out = adjust(a, {128, 128, 128});
+    CHECK(out.b > out.r + 10);
+    a = none();
+    a.tint = 50;
+    out = adjust(a, {128, 128, 128});
+    CHECK(out.g + 5 < out.r && out.g + 5 < out.b);
+}
+
+void test_saturation_and_vibrance() {
+    aibs_adjustments a = none();
+    a.saturation = -100;
+    const Rgb grey_out = adjust(a, {200, 80, 30});
+    CHECK(grey_out.r == grey_out.g && grey_out.g == grey_out.b);
+
+    a.saturation = 50;
+    CHECK(chroma(adjust(a, {150, 110, 90})) > chroma({150, 110, 90}));
+
+    // Vibrance raises weak colours relatively more than strong ones.
+    a = none();
+    a.vibrance = 100;
+    const Rgb weak{140, 120, 110}, strong{220, 40, 30};
+    const double weak_gain = static_cast<double>(chroma(adjust(a, weak))) / chroma(weak);
+    const double strong_gain = static_cast<double>(chroma(adjust(a, strong))) / chroma(strong);
+    CHECK(weak_gain > strong_gain + 0.2);
+}
+
+void test_hsl_bands_are_selective() {
+    aibs_adjustments a = none();
+    a.hsl_saturation[0] = -100;  // red
+    const Rgb red = adjust(a, {220, 30, 30});
+    CHECK(chroma(red) < 60);
+    const Rgb blue = adjust(a, {30, 30, 220});
+    CHECK(std::abs(blue.r - 30) <= 1 && std::abs(blue.g - 30) <= 1 && std::abs(blue.b - 220) <= 1);
+    const Rgb neutral = adjust(a, {128, 128, 128});
+    CHECK(neutral.r == neutral.g && neutral.g == neutral.b);
+
+    a = none();
+    a.hsl_hue[5] = 100;  // blue shifts 30 degrees towards purple
+    const Rgb shifted = adjust(a, {30, 30, 220});
+    CHECK(shifted.r > 60 && shifted.b > 180);
+    const Rgb green = adjust(a, {30, 200, 30});
+    CHECK(std::abs(green.r - 30) <= 1 && std::abs(green.g - 200) <= 1 && std::abs(green.b - 30) <= 1);
+
+    a = none();
+    a.hsl_luminance[3] = -100;  // green darker
+    const Rgb darker = adjust(a, {40, 180, 40});
+    CHECK(darker.g < 150);
 }
 
 }  // namespace
 
 void run_adjust_tests() {
-    test_zero_adjustments_change_nothing();
+    test_all_zero_changes_nothing();
     test_exposure_plus_one_doubles_linear_light();
-    test_curves_are_monotonic_and_limited();
-    test_render_applies_adjustments_right_of_the_split();
+    test_grey_ramps_stay_in_order();
+    test_brightness_and_contrast();
+    test_tone_controls_act_on_their_range();
+    test_white_balance();
+    test_saturation_and_vibrance();
+    test_hsl_bands_are_selective();
 }

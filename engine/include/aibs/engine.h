@@ -60,20 +60,40 @@ AIBS_API int32_t aibs_decode_rgba8(const uint8_t* bytes, size_t len,
 /* Release an image returned by the engine. Safe on a zeroed struct. */
 AIBS_API void aibs_image_free(aibs_image* image);
 
+/* Number of colour bands for HSL adjustments, in order: red, orange,
+ * yellow, green, aqua, blue, purple, magenta. */
+#define AIBS_HSL_BANDS 8
+
 /*
- * Tone adjustments, all zero = unchanged. Applied per colour channel in this
- * order: exposure in linear light, then brightness and contrast on the
- * display-encoded (sRGB) value.
+ * Light and colour adjustments; all zero leaves the image unchanged.
+ * Values outside their range are clamped; non-numbers count as zero.
+ *
+ * Order of application: white balance and exposure in linear light; the
+ * tone controls (highlights, shadows, whites, blacks) on luminance, keeping
+ * hue; then, on display-encoded values, HSL, saturation and vibrance; then
+ * brightness and contrast per channel.
  */
 typedef struct aibs_adjustments {
-    float exposure;    /* stops (EV), -5 to +5; +1 doubles linear light */
-    float brightness;  /* -100 to +100; lifts or lowers midtones, keeps black and white */
-    float contrast;    /* -100 to +100; steepens or flattens tones around middle grey */
+    float exposure;     /* stops (EV), -5 to +5; +1 doubles linear light */
+    float brightness;   /* -100 to +100; midtones up or down, keeps black and white */
+    float contrast;     /* -100 to +100; around middle grey */
+    float highlights;   /* -100 to +100; mostly the bright tones */
+    float shadows;      /* -100 to +100; mostly the dark tones */
+    float whites;       /* -100 to +100; the brightest tones and clipping point */
+    float blacks;       /* -100 to +100; the darkest tones and black point */
+    float temperature;  /* -100 (cooler, bluer) to +100 (warmer, yellower) */
+    float tint;         /* -100 (greener) to +100 (more magenta) */
+    float vibrance;     /* -100 to +100; acts more on less saturated colours */
+    float saturation;   /* -100 (grey) to +100 */
+    float hsl_hue[AIBS_HSL_BANDS];         /* -100 to +100, up to 30 degrees */
+    float hsl_saturation[AIBS_HSL_BANDS];  /* -100 to +100 */
+    float hsl_luminance[AIBS_HSL_BANDS];   /* -100 to +100 */
 } aibs_adjustments;
 
-/* Fill lut[256] with the 8-bit result of applying the adjustments to each
- * 8-bit sRGB input value. Out-of-range values are clamped first. */
-AIBS_API int32_t aibs_adjustments_lut(const aibs_adjustments* adjustments, uint8_t* lut);
+/* Apply adjustments to pixel_count packed 8-bit RGB pixels, exactly as
+ * rendering does. in and out may be the same buffer. */
+AIBS_API int32_t aibs_adjust_rgb8(const aibs_adjustments* adjustments,
+                                  const uint8_t* in, uint8_t* out, size_t pixel_count);
 
 /*
  * A decoded image kept at full resolution inside the engine, with a

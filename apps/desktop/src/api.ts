@@ -1,7 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask, open } from "@tauri-apps/plugin-dialog";
-import type { Adjustments, EditState, FileInfo, LanguagePreference, Settings, Startup, ThemePreference } from "./types";
+import type {
+  Adjustments,
+  EditorMode,
+  EditState,
+  FileInfo,
+  LanguagePreference,
+  Settings,
+  Startup,
+  ThemePreference,
+} from "./types";
 
 /**
  * Everything the UI asks of the Rust core. The store depends on this
@@ -32,6 +41,7 @@ export interface Api {
   fileInfo(path: string): Promise<FileInfo>;
   setTheme(theme: ThemePreference): Promise<Settings>;
   setLanguage(language: LanguagePreference): Promise<Settings>;
+  setEditorMode(mode: EditorMode): Promise<Settings>;
   removeRecent(path: string): Promise<Settings>;
   clearRecent(): Promise<Settings>;
   thirdPartyNotices(): Promise<string>;
@@ -82,6 +92,7 @@ export const tauriApi: Api = {
   fileInfo: (path) => invoke("file_info", { path }),
   setTheme: (theme) => invoke("set_theme", { theme }),
   setLanguage: (language) => invoke("set_language", { language }),
+  setEditorMode: (mode) => invoke("set_editor_mode", { mode }),
   removeRecent: (path) => invoke("remove_recent", { path }),
   clearRecent: () => invoke("clear_recent"),
   thirdPartyNotices: () => invoke("third_party_notices"),

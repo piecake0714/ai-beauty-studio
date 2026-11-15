@@ -501,7 +501,7 @@ input:focus-visible {
 .adjust-panel {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
   padding-bottom: 20px;
   margin-bottom: 16px;
   border-bottom: 1px solid var(--border);
@@ -597,4 +597,62 @@ input:focus-visible {
   border-radius: 8px;
   background: #ffffff;
   box-shadow: 0 0 3px rgb(0 0 0 / 0.6);
+}
+
+/* Adjustment panel sections and mode switch */
+.adjust-panel section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.adjust-panel section h2 {
+  margin: 4px 0 0;
+  font-size: 0.95rem;
+}
+
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+}
+
+.segmented button {
+  padding: 4px 12px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.segmented button.active {
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.15);
+}
+
+.segmented.small button {
+  padding: 3px 10px;
+  font-size: 0.85rem;
+}
+
+.note {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--info-bg);
+  color: var(--info-text);
+  font-size: 0.85rem;
+}
+
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: middle;
 }

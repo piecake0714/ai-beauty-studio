@@ -222,11 +222,26 @@ mod tests {
             ((seed >> 8) as f32 / (1u32 << 24) as f32 * 2.0 - 1.0) * range
         };
         for _ in 0..200 {
-            history.commit(Adjustments {
+            let mut a = Adjustments {
                 exposure: next(3.0),
                 brightness: next(100.0),
                 contrast: next(100.0),
-            });
+                highlights: next(100.0),
+                shadows: next(100.0),
+                whites: next(100.0),
+                blacks: next(100.0),
+                temperature: next(100.0),
+                tint: next(100.0),
+                vibrance: next(100.0),
+                saturation: next(100.0),
+                ..Default::default()
+            };
+            for band in 0..8 {
+                a.hsl_hue[band] = next(100.0);
+                a.hsl_saturation[band] = next(100.0);
+                a.hsl_luminance[band] = next(100.0);
+            }
+            history.commit(a);
         }
         let end = render(&history);
         assert_ne!(start, end);

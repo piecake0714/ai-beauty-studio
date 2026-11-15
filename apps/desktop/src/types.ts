@@ -9,9 +9,13 @@ export interface RecentFile {
   openedAt: number;
 }
 
+/** Beginner shows the most-used adjustments; advanced shows all. */
+export type EditorMode = "beginner" | "advanced";
+
 export interface Settings {
   theme: ThemePreference;
   language: LanguagePreference;
+  editorMode: EditorMode;
   recent: RecentFile[];
 }
 
@@ -28,17 +32,50 @@ export interface Startup {
   version: string;
 }
 
-/** Tone adjustments; all zero leaves the image unchanged. */
+/** Number of HSL colour bands: red, orange, yellow, green, aqua, blue, purple, magenta. */
+export const HSL_BANDS = 8;
+
+/**
+ * Light and colour adjustments; all zero leaves the image unchanged.
+ * Exposure is in stops (EV), -5 to +5; every other value -100 to +100.
+ */
 export interface Adjustments {
-  /** Stops (EV), -5 to +5. */
   exposure: number;
-  /** -100 to +100. */
   brightness: number;
-  /** -100 to +100. */
   contrast: number;
+  highlights: number;
+  shadows: number;
+  whites: number;
+  blacks: number;
+  temperature: number;
+  tint: number;
+  vibrance: number;
+  saturation: number;
+  /** One value per colour band. */
+  hslHue: number[];
+  hslSaturation: number[];
+  hslLuminance: number[];
 }
 
-export const NO_ADJUSTMENTS: Adjustments = { exposure: 0, brightness: 0, contrast: 0 };
+export type ScalarAdjustment = Exclude<keyof Adjustments, "hslHue" | "hslSaturation" | "hslLuminance">;
+export type BandAdjustment = "hslHue" | "hslSaturation" | "hslLuminance";
+
+export const NO_ADJUSTMENTS: Adjustments = Object.freeze({
+  exposure: 0,
+  brightness: 0,
+  contrast: 0,
+  highlights: 0,
+  shadows: 0,
+  whites: 0,
+  blacks: 0,
+  temperature: 0,
+  tint: 0,
+  vibrance: 0,
+  saturation: 0,
+  hslHue: Object.freeze(new Array(HSL_BANDS).fill(0)) as number[],
+  hslSaturation: Object.freeze(new Array(HSL_BANDS).fill(0)) as number[],
+  hslLuminance: Object.freeze(new Array(HSL_BANDS).fill(0)) as number[],
+}) as Adjustments;
 
 export interface EditState {
   adjustments: Adjustments;

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Api } from "./api";
 import { FRAME_HEADER_LEN } from "./frame";
 import { createAppStore, defaultSettings } from "./store";
-import { NO_ADJUSTMENTS, type Adjustments, type EditState, type LanguagePreference, type Settings, type ThemePreference } from "./types";
+import { NO_ADJUSTMENTS, type Adjustments, type EditorMode, type EditState, type LanguagePreference, type Settings, type ThemePreference } from "./types";
 
 function frameBuffer(width: number, height: number): ArrayBuffer {
   const buffer = new ArrayBuffer(FRAME_HEADER_LEN + width * height * 4);
@@ -60,6 +60,7 @@ function fakeApi(overrides: Partial<Api> = {}): Api {
     fileInfo: vi.fn(async () => ({ name: "a.jpg", sizeBytes: 1234, format: "JPEG" as const })),
     setTheme: vi.fn(async (theme: ThemePreference) => (settings = { ...settings, theme })),
     setLanguage: vi.fn(async (language: LanguagePreference) => (settings = { ...settings, language })),
+    setEditorMode: vi.fn(async (editorMode: EditorMode) => (settings = { ...settings, editorMode })),
     removeRecent: vi.fn(async (path: string) => (settings = { ...settings, recent: settings.recent.filter((r) => r.path !== path) })),
     clearRecent: vi.fn(async () => (settings = { ...settings, recent: [] })),
     thirdPartyNotices: vi.fn(async () => "notices"),
@@ -242,7 +243,7 @@ describe("app store", () => {
   it("resets all adjustments as one undoable step", async () => {
     const store = createAppStore(fakeApi());
     await store.getState().openPath("C:\\a.jpg");
-    store.getState().setLive({ exposure: 1, brightness: 5, contrast: 5 });
+    store.getState().setLive({ ...NO_ADJUSTMENTS, exposure: 1, brightness: 5, contrast: 5 });
     await store.getState().commitLive();
     await store.getState().resetAdjustments();
     expect(store.getState().edit?.edited).toBe(false);
@@ -284,5 +285,19 @@ describe("app store", () => {
     expect(store.getState().originalColumns(1000)).toBe(1000);
     store.getState().setSplit(5);
     expect(store.getState().split).toBe(1);
+  });
+
+  it("switches between beginner and advanced mode without touching adjustments", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    await store.getState().init();
+    expect(store.getState().settings.editorMode).toBe("beginner");
+    await store.getState().openPath("C:\\a.jpg");
+    store.getState().setLive({ ...NO_ADJUSTMENTS, vibrance: 40 });
+    await store.getState().commitLive();
+    await store.getState().setEditorMode("advanced");
+    expect(api.setEditorMode).toHaveBeenCalledWith("advanced");
+    expect(store.getState().settings.editorMode).toBe("advanced");
+    expect(store.getState().live.vibrance).toBe(40);
   });
 });
