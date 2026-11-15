@@ -1,0 +1,13 @@
+{
+  "model": "upscale-realesrgan-x2",
+  "version": "x2plus-sceneworks-onnx",
+  "source": "Real-ESRGAN (Xintao Wang et al., https://github.com/xinntao/Real-ESRGAN) RealESRGAN_x2plus weights, exported to ONNX without weight changes by SceneWorks at https://huggingface.co/SceneWorks/real-esrgan-onnx (model card license: BSD-3-Clause)",
+  "license": "BSD-3-Clause",
+  "licenseText": "licenses/upscale-realesrgan-x2.LICENSE.txt (upstream Real-ESRGAN LICENSE, downloaded with the model by scripts/fetch_models.py)",
+  "commercialUse": true,
+  "trainingData": "DIV2K, Flickr2K and OutdoorSceneTraining per the upstream project; dataset terms not reviewed",
+  "notes": "Enlarges exports 2x (4x as two passes). Input dimensions must be even.",
+  "checkedOn": "2026-11-16",
+  "checkedBy": "Project maintainer",
+  "approved": true
+}

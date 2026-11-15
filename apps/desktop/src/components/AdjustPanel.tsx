@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { AiRepairSection } from "./AiRepairSection";
 import { LayersSection } from "./LayersSection";
 import { LookSection } from "./LookSection";
 import {
@@ -12,6 +13,7 @@ import {
   LIGHT,
   MAX_HEAL_SIZE,
   MIN_HEAL_SIZE,
+  NOISE,
   PORTRAIT,
   toHex,
   withBand,
@@ -44,6 +46,8 @@ const RANGE: Record<ScalarAdjustment, { min: number; max: number; step: number; 
   eyeEnhance: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
   teethWhitening: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
   backgroundDetail: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
+  noiseLuminance: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
+  noiseColor: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
   backgroundBlur: { min: 0, max: 100, step: 1, format: (v) => v.toFixed(0) },
   backgroundBrightness: { min: -100, max: 100, step: 1, format: signed(0) },
   backgroundSaturation: { min: -100, max: 100, step: 1, format: signed(0) },
@@ -367,6 +371,13 @@ export function AdjustPanel() {
         <h2 id="colour-title">{t("adjust.colour")}</h2>
         {visible(COLOUR).map(scalar)}
       </section>
+
+      <section aria-labelledby="noise-title">
+        <h2 id="noise-title">{t("noise.title")}</h2>
+        {NOISE.map(scalar)}
+      </section>
+
+      <AiRepairSection />
 
       <section aria-labelledby="portrait-title">
         <h2 id="portrait-title">{t("adjust.portrait")}</h2>

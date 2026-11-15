@@ -30,6 +30,7 @@ export const BEGINNER: ScalarAdjustment[] = [
 
 export const LIGHT: ScalarAdjustment[] = ["exposure", "contrast", "highlights", "shadows", "whites", "blacks", "brightness"];
 export const COLOUR: ScalarAdjustment[] = ["temperature", "tint", "vibrance", "saturation"];
+export const NOISE: ScalarAdjustment[] = ["noiseLuminance", "noiseColor"];
 export const PORTRAIT: ScalarAdjustment[] = ["skinSmoothing", "blemishRemoval", "darkCircles", "eyeEnhance", "teethWhitening"];
 export const BACKGROUND: ScalarAdjustment[] = [
   "backgroundBlur",
@@ -73,7 +74,7 @@ export function hasHiddenInBeginner(adjustments: Adjustments): boolean {
 
 /** Stable text key of adjustments, for detecting what a render was made with. */
 export function adjustmentsKey(adjustments: Adjustments): string {
-  const scalars = [...LIGHT, ...COLOUR, ...PORTRAIT, ...BACKGROUND, ...LIGHTING].map((key) => adjustments[key]);
+  const scalars = [...LIGHT, ...COLOUR, ...NOISE, ...PORTRAIT, ...BACKGROUND, ...LIGHTING].map((key) => adjustments[key]);
   const bands = BANDS.map((key) => Array.from({ length: HSL_BANDS }, (_, i) => adjustments[key][i] ?? 0));
   const background = [adjustments.backgroundMode, ...adjustments.backgroundColor, adjustments.backgroundImage];
   const light = [adjustments.lightKind, adjustments.lightX, adjustments.lightY, adjustments.lightSubjectOnly];
@@ -85,6 +86,7 @@ export function adjustmentsKey(adjustments: Adjustments): string {
     adjustments.layers ?? [],
     adjustments.crop ?? FULL_CROP,
     adjustments.spots ?? [],
+    adjustments.removals ?? [],
     adjustments.curves ?? null,
     adjustments.grading ?? null,
     adjustments.lut ?? null,

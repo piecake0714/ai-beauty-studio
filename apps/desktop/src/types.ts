@@ -33,6 +33,8 @@ export interface ExportOptions {
   quality: number;
   /** Longest side in pixels; null keeps the original size. */
   longSide: number | null;
+  /** AI enlargement: 1 (none), 2 or 4; when enlarging, longSide is not used. */
+  upscale: 1 | 2 | 4;
 }
 
 export interface DocumentStatus {
@@ -116,6 +118,11 @@ export interface Adjustments {
   teethWhitening: number;
   /** Healing spots, in source pixels. */
   spots: HealSpot[];
+  /** Noise reduction, 0–100: brightness grain and colour blotches. */
+  noiseLuminance: number;
+  noiseColor: number;
+  /** Object removals in effect (ids of the document's patches), in order. */
+  removals: number[];
   /** Background treatment; applies once subject and background are separated. */
   backgroundMode: BackgroundMode;
   /** R, G, B (0–255) for the "color" mode. */
@@ -281,6 +288,7 @@ export type ScalarAdjustment = Exclude<
   | "curves"
   | "grading"
   | "lut"
+  | "removals"
 >;
 export type BandAdjustment = "hslHue" | "hslSaturation" | "hslLuminance";
 
@@ -305,6 +313,9 @@ export const NO_ADJUSTMENTS: Adjustments = Object.freeze({
   eyeEnhance: 0,
   teethWhitening: 0,
   spots: Object.freeze([]) as unknown as HealSpot[],
+  noiseLuminance: 0,
+  noiseColor: 0,
+  removals: Object.freeze([]) as unknown as number[],
   backgroundMode: "original",
   backgroundColor: Object.freeze([0, 0, 0]) as unknown as [number, number, number],
   backgroundBlur: 0,

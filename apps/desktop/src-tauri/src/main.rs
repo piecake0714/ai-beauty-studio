@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use application_core::ai::{self, Hardware};
 use application_core::background::{self as separation, ModelSlot};
-use application_core::document::{Adjustments, EditState, History};
+use application_core::document::{Adjustments, EditState, History, StrokeData};
 use application_core::export::{self, ExportOptions};
 use application_core::files::FileRef;
 use application_core::models::{ModelInfo, ModelRef};
@@ -20,7 +20,8 @@ use application_core::models::Registry;
 use application_core::portrait::{self, FaceStatus};
 use application_core::info::{self, FileInfo};
 use application_core::settings::{self, EditorMode, LanguagePreference, Settings, ThemePreference};
-use application_core::{AiSession, EngineError, Face, Matte, Shape, Source};
+use application_core::inpaint::{self, PatchData};
+use application_core::{AiSession, EngineError, Face, Matte, Patch, Shape, Source};
 use tauri::ipc::Response;
 use tauri::path::BaseDirectory;
 use tauri::{Emitter, Manager, State};
@@ -65,6 +66,30 @@ struct OpenDocument {
     shape_model: Option<ModelRef>,
     /// LUT presets and imported LUTs.
     luts: Arc<LutLibrary>,
+    /// Object-removal and repair patches, by id.
+    patches: Vec<DocPatch>,
+}
+
+/// A patch of the document: its data (saved in projects) and the engine's
+/// copy (used when rendering).
+#[derive(Clone)]
+struct DocPatch {
+    data: Arc<PatchData>,
+    engine: Arc<Patch>,
+}
+
+impl DocPatch {
+    fn new(data: PatchData) -> Result<DocPatch, String> {
+        let engine = data.to_engine().map_err(engine_error_code)?;
+        Ok(DocPatch { data: Arc::new(data), engine: Arc::new(engine) })
+    }
+}
+
+impl OpenDocument {
+    /// The next free patch id.
+    fn next_patch_id(&self) -> u32 {
+        self.patches.iter().map(|p| p.data.id).max().unwrap_or(0) + 1
+    }
 }
 
 /// An image used by the edits; `source` is None when a project refers to an
@@ -84,6 +109,7 @@ struct RenderInputs {
     shape: Option<Arc<Shape>>,
     images: Vec<Option<Arc<Source>>>,
     luts: Arc<LutLibrary>,
+    patches: Vec<DocPatch>,
 }
 
 impl OpenDocument {
@@ -95,6 +121,7 @@ impl OpenDocument {
             shape: self.shape.clone(),
             images: self.images.iter().map(|b| b.source.clone()).collect(),
             luts: self.luts.clone(),
+            patches: self.patches.clone(),
         }
     }
 
@@ -109,6 +136,7 @@ impl OpenDocument {
             backgrounds: self.images.iter().map(|b| b.file.clone()).collect(),
             project_path: self.project_path.clone(),
             models: [self.faces_model.clone(), self.matte_model.clone(), self.shape_model.clone()],
+            patches: self.patches.iter().map(|p| (*p.data).clone()).collect(),
         }
     }
 }
@@ -124,6 +152,7 @@ struct SaveParts {
     project_path: Option<PathBuf>,
     /// Models of the faces, matte and shape.
     models: [Option<ModelRef>; 3],
+    patches: Vec<PatchData>,
 }
 
 /// Longer side of the preview stored in projects.
@@ -158,6 +187,7 @@ impl SaveParts {
                 shape: self.models[2].as_ref(),
             },
             images: &self.backgrounds,
+            patches: &self.patches,
             preview,
             saved_at: now_seconds(),
         }
@@ -190,6 +220,13 @@ impl RenderInputs {
         let images: Vec<Option<&Source>> = self.images.iter().map(|s| s.as_deref()).collect();
         let layers = prepared.layers(self.matte.as_deref(), &images);
         let spots = clamped.engine_spots();
+        // The patches in effect, in the order the adjustments list them.
+        let patches: Vec<&Patch> = clamped
+            .removals
+            .iter()
+            .filter_map(|id| self.patches.iter().find(|p| p.data.id == *id))
+            .map(|p| p.engine.as_ref())
+            .collect();
         let lut = self.luts.get(&clamped.lut.id);
         let look = clamped.look(lut.as_deref());
         self.source.render_adjusted(
@@ -199,7 +236,7 @@ impl RenderInputs {
             h,
             out_w,
             out_h,
-            Some(clamped.portrait(&self.faces, &spots)),
+            Some(clamped.portrait(&self.faces, &spots, &patches)),
             Some(&colour),
             background,
             light,
@@ -239,6 +276,10 @@ struct AppState {
     background_model: Arc<ModelSlot>,
     /// The depth model for 3D lighting, loaded on first use and kept.
     depth_model: Arc<ModelSlot>,
+    /// The inpainting model (object removal, old-photo repair).
+    inpaint_model: Arc<ModelSlot>,
+    /// The upscaling model (enlarged export).
+    upscale_model: Arc<ModelSlot>,
     /// Automatic recovery of unsaved work.
     recovery: Recovery,
     /// The file given on the command line, until the UI asks for it.
@@ -341,6 +382,7 @@ struct Opening {
     images: Vec<DocImage>,
     /// Models of the faces, matte and shape (from a project).
     models: [Option<ModelRef>; 3],
+    patches: Vec<PatchData>,
 }
 
 /// Make `opening` the open document and start face detection if needed.
@@ -355,6 +397,8 @@ fn install(app: &tauri::AppHandle, state: &AppState, opening: Opening) -> Result
         None => (Vec::new(), FaceStatus::Detecting),
     };
     let source = opening.source.clone();
+    // A patch that cannot be read is left out (its removal shows the original).
+    let patches: Vec<DocPatch> = opening.patches.into_iter().filter_map(|p| DocPatch::new(p).ok()).collect();
     *state.document.lock().map_err(|_| "internal".to_string())? = Some(OpenDocument {
         serial,
         source: opening.source,
@@ -370,6 +414,7 @@ fn install(app: &tauri::AppHandle, state: &AppState, opening: Opening) -> Result
         matte_model: opening.models[1].clone(),
         shape_model: opening.models[2].clone(),
         luts: state.luts.clone(),
+        patches,
     });
     // The previous document's recovery no longer applies.
     state.recovery.discard();
@@ -427,6 +472,7 @@ async fn open_image(path: String, app: tauri::AppHandle, state: State<'_, AppSta
             shape: None,
             images: Vec::new(),
             models: Default::default(),
+            patches: Vec::new(),
         },
     )?;
     // The image opened; failing to save the recent list must not block it.
@@ -476,6 +522,7 @@ fn load_project(path: &Path, original: Option<&Path>) -> Result<(Opening, applic
             shape: loaded.shape,
             images,
             models,
+            patches: loaded.patches,
         },
         overview,
     ))
@@ -660,12 +707,23 @@ fn export_image(path: String, options: ExportOptions, state: State<'_, AppState>
         .collect();
     let protected_refs: Vec<&Path> = protected.iter().map(PathBuf::as_path).collect();
     export::check_target(&target, &protected_refs).map_err(|e| e.code().to_string())?;
+    if !matches!(options.upscale, 1 | 2 | 4) {
+        return Err("export_invalid_options".to_string());
+    }
+    let models_dir = state.models_dir.clone();
+    let upscale_slot = state.upscale_model.clone();
     Ok(state.jobs.start(move |ctx| {
         // The kept (cropped) part of the photo, rendered in strips so
         // memory stays bounded for large photos.
         let adjustments = parts.history.current();
         let region = adjustments.crop.rect(parts.inputs.source.width(), parts.inputs.source.height());
-        let (out_w, out_h) = export::output_size(region.2, region.3, options.long_side);
+        let enlarging = options.upscale > 1;
+        let (out_w, out_h) = export::output_size(region.2, region.3, if enlarging { None } else { options.long_side });
+        if enlarging && !application_core::upscale::fits(out_w, out_h, options.upscale) {
+            return Err(JobError::new("upscale_too_large", format!("{out_w}x{out_h} x{}", options.upscale)));
+        }
+        // Rendering takes most of a plain export; enlarging most of an enlarged one.
+        let render_share = if enlarging { 0.25 } else { 0.68 };
         ctx.progress(0.02, "render");
         let image = export::render_in_strips(
             region,
@@ -681,10 +739,21 @@ fn export_image(path: String, options: ExportOptions, state: State<'_, AppState>
             },
             |done| {
                 ctx.check()?;
-                ctx.progress(0.02 + 0.68 * done, "render");
+                ctx.progress(0.02 + render_share * done, "render");
                 Ok(())
             },
         )?;
+        ctx.check()?;
+        let image = if enlarging {
+            let registry = Registry::load(&models_dir).map_err(|e| JobError::new(e.code(), e.to_string()))?;
+            let (big, _model) = application_core::upscale::upscale(&registry, &upscale_slot, &image, options.upscale, ctx, |done| {
+                ctx.progress(0.27 + 0.45 * done, "upscale")
+            })?;
+            big
+        } else {
+            image
+        };
+        let (out_w, out_h) = (image.width, image.height);
         ctx.check()?;
         ctx.progress(0.75, "encode");
         let bytes = export::encode(&image, &options).map_err(|e| JobError::new(e.code(), e.to_string()))?;
@@ -961,6 +1030,80 @@ async fn add_background_image(path: String, state: State<'_, AppState>) -> Resul
     Ok(document.images.len() as u32)
 }
 
+/// Remove what `strokes` paint over (source pixels), as a background job.
+/// The finished job's result is {"serial", "patchId"}; the patch is added
+/// to the document, and the UI makes it take effect by adding its id to
+/// the adjustments' removals (one undoable step).
+#[tauri::command]
+fn remove_object(
+    strokes: Vec<StrokeData>,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<u64, String> {
+    let (serial, source) = {
+        let document = state.document.lock().map_err(|_| "internal".to_string())?;
+        let document = document.as_ref().ok_or_else(|| "no_document".to_string())?;
+        (document.serial, document.source.clone())
+    };
+    let models_dir = state.models_dir.clone();
+    let slot = state.inpaint_model.clone();
+    Ok(state.jobs.start(move |ctx| {
+        let registry = Registry::load(&models_dir).map_err(|e| JobError::new(e.code(), e.to_string()))?;
+        // The id is settled when the patch is added (another may have come first).
+        let mut patch = inpaint::remove(&registry, &slot, &source, &strokes, 0, ctx)?;
+        let state = app.state::<AppState>();
+        let mut document = state.document.lock().map_err(|_| JobError::new("internal", "document lock"))?;
+        let document = document
+            .as_mut()
+            .filter(|d| d.serial == serial)
+            .ok_or_else(|| JobError::new("cancelled", "another image was opened"))?;
+        patch.id = document.next_patch_id();
+        let id = patch.id;
+        document.patches.push(DocPatch::new(patch).map_err(|code| JobError::new(&code, "patch"))?);
+        Ok(serde_json::json!({ "serial": serial, "patchId": id }))
+    }))
+}
+
+/// Repair an old photo (dust and scratches filled; faded colour, contrast
+/// and grain corrected) as a background job. The result is {"serial",
+/// "adjustments"}: the current adjustments with the repair added, to be
+/// committed by the UI as one step.
+#[tauri::command]
+fn repair_old_photo(strength: f32, app: tauri::AppHandle, state: State<'_, AppState>) -> Result<u64, String> {
+    let (serial, source, current, first_id) = {
+        let document = state.document.lock().map_err(|_| "internal".to_string())?;
+        let document = document.as_ref().ok_or_else(|| "no_document".to_string())?;
+        (document.serial, document.source.clone(), document.history.current(), document.next_patch_id())
+    };
+    let models_dir = state.models_dir.clone();
+    let slot = state.inpaint_model.clone();
+    Ok(state.jobs.start(move |ctx| {
+        let registry = Registry::load(&models_dir).map_err(|e| JobError::new(e.code(), e.to_string()))?;
+        let repair = inpaint::repair_old_photo(&registry, &slot, &source, &current, strength / 100.0, first_id, ctx)?;
+        let state = app.state::<AppState>();
+        let mut document = state.document.lock().map_err(|_| JobError::new("internal", "document lock"))?;
+        let document = document
+            .as_mut()
+            .filter(|d| d.serial == serial)
+            .ok_or_else(|| JobError::new("cancelled", "another image was opened"))?;
+        // Renumber if patches were added meanwhile.
+        let mut adjustments = repair.adjustments;
+        let first = document.next_patch_id();
+        let renumbered: Vec<(u32, u32)> =
+            repair.patches.iter().enumerate().map(|(i, p)| (p.id, first + i as u32)).collect();
+        for id in adjustments.removals.iter_mut() {
+            if let Some((_, new)) = renumbered.iter().find(|(old, _)| old == id) {
+                *id = *new;
+            }
+        }
+        for (mut patch, (_, new)) in repair.patches.into_iter().zip(renumbered) {
+            patch.id = new;
+            document.patches.push(DocPatch::new(patch).map_err(|code| JobError::new(&code, "patch"))?);
+        }
+        Ok(serde_json::json!({ "serial": serial, "adjustments": adjustments }))
+    }))
+}
+
 /// The LUT presets and the user's imported LUTs.
 #[tauri::command]
 fn list_luts(state: State<'_, AppState>) -> Vec<LutEntry> {
@@ -1016,6 +1159,10 @@ fn model_overview(state: State<'_, AppState>) -> Result<Vec<ModelOverview>, Stri
                     (state.background_model.loaded_provider().map(provider_name), Some("background"))
                 }
                 separation::DEPTH_MODEL => (state.depth_model.loaded_provider().map(provider_name), Some("lighting")),
+                inpaint::INPAINT_MODEL => (state.inpaint_model.loaded_provider().map(provider_name), Some("removal")),
+                application_core::upscale::UPSCALE_MODEL => {
+                    (state.upscale_model.loaded_provider().map(provider_name), Some("upscale"))
+                }
                 "test-luma" => (None, Some("selfTest")),
                 _ => (None, None),
             };
@@ -1053,7 +1200,13 @@ fn verify_models(state: State<'_, AppState>) -> Result<u64, String> {
 #[tauri::command]
 fn unload_models(state: State<'_, AppState>) -> Result<u32, String> {
     let detector = state.detector.lock().map_err(|_| "internal".to_string())?.take().is_some();
-    let count = [detector, state.background_model.unload(), state.depth_model.unload()]
+    let count = [
+        detector,
+        state.background_model.unload(),
+        state.depth_model.unload(),
+        state.inpaint_model.unload(),
+        state.upscale_model.unload(),
+    ]
         .into_iter()
         .filter(|&released| released)
         .count();
@@ -1167,6 +1320,8 @@ fn main() {
                 detector: Mutex::new(None),
                 background_model: Arc::new(ModelSlot::new(separation::BACKGROUND_MODEL)),
                 depth_model: Arc::new(ModelSlot::new(separation::DEPTH_MODEL)),
+                inpaint_model: Arc::new(ModelSlot::new(inpaint::INPAINT_MODEL)),
+                upscale_model: Arc::new(ModelSlot::new(application_core::upscale::UPSCALE_MODEL)),
                 recovery,
                 launch_path: Mutex::new(launch_path_from(std::env::args().skip(1))),
                 luts: Arc::new(LutLibrary::new(app.path().app_data_dir()?.join("luts"))),
@@ -1201,6 +1356,8 @@ fn main() {
             unload_models,
             list_luts,
             import_lut,
+            remove_object,
+            repair_old_photo,
             background_status,
             add_background_image,
             thumbnail,

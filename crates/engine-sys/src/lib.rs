@@ -142,6 +142,27 @@ extern "C" {
     fn aibs_ai_close(session: *mut AiSessionRaw);
     fn aibs_adjust_rgb8(adjustments: *const Adjustments, input: *const u8, output: *mut u8, pixel_count: usize) -> i32;
     fn aibs_source_free(source: *mut AibsSourceRaw);
+    fn aibs_patch_create(
+        rgba: *const u8,
+        width: u32,
+        height: u32,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        out: *mut *mut PatchRaw,
+    ) -> i32;
+    fn aibs_patch_free(patch: *mut PatchRaw);
+    fn aibs_ai_run_inputs(
+        session: *mut AiSessionRaw,
+        inputs: *const *const f32,
+        shapes: *const *const i64,
+        ranks: *const usize,
+        input_count: usize,
+        output: *mut *mut f32,
+        out_shape: *mut i64,
+        out_rank: *mut usize,
+    ) -> i32;
     fn aibs_lut_create(rgb: *const f32, size: u32, out: *mut *mut LutRaw) -> i32;
     fn aibs_lut_free(lut: *mut LutRaw);
     fn aibs_look_rgb8(look: *const LookRaw, input: *const u8, output: *mut u8, pixel_count: usize) -> i32;
@@ -335,6 +356,11 @@ pub struct Portrait<'a> {
     pub teeth: f32,
     /// Healing spots (work without faces too).
     pub spots: &'a [Spot],
+    /// Noise reduction, 0..100: brightness grain and colour blotches.
+    pub noise_luminance: f32,
+    pub noise_color: f32,
+    /// Replacement pixels (object removal), applied first, in order.
+    pub patches: &'a [&'a Patch],
 }
 
 #[repr(C)]
@@ -348,6 +374,58 @@ struct PortraitRaw {
     teeth: f32,
     spots: *const Spot,
     spot_count: u32,
+    noise_luminance: f32,
+    noise_color: f32,
+    patches: *const *const PatchRaw,
+    patch_count: u32,
+}
+
+/// Most patches used in one render.
+pub const MAX_PATCHES: usize = 200;
+
+#[repr(C)]
+struct PatchRaw {
+    _private: [u8; 0],
+}
+
+/// Replacement pixels for a rectangle of the photo (object removal); made
+/// by [`Patch::new`], read-only after.
+pub struct Patch {
+    raw: *mut PatchRaw,
+}
+
+// SAFETY: a patch is read-only after creation; the engine reads it from
+// any thread.
+unsafe impl Send for Patch {}
+unsafe impl Sync for Patch {}
+
+impl Patch {
+    /// A patch of width x height RGBA8 pixels covering the source rectangle
+    /// (x, y, w, h).
+    pub fn new(rgba: &[u8], width: u32, height: u32, rect: [f32; 4]) -> Result<Patch, EngineError> {
+        if rgba.len() != width as usize * height as usize * 4 {
+            return Err(EngineError::InvalidArgument);
+        }
+        let mut raw: *mut PatchRaw = std::ptr::null_mut();
+        // SAFETY: `rgba` holds width * height * 4 bytes; `raw` is writable.
+        status_to_result(unsafe {
+            aibs_patch_create(rgba.as_ptr(), width, height, rect[0], rect[1], rect[2], rect[3], &mut raw)
+        })?;
+        Ok(Patch { raw })
+    }
+}
+
+impl Drop for Patch {
+    fn drop(&mut self) {
+        // SAFETY: `raw` came from aibs_patch_create and is freed once.
+        unsafe { aibs_patch_free(self.raw) };
+    }
+}
+
+impl std::fmt::Debug for Patch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Patch")
+    }
 }
 
 #[repr(C)]
@@ -963,6 +1041,45 @@ impl AiSession {
     }
 
     /// Run the model. Returns the output values and their shape.
+    /// Run a model with several inputs (in the model's input order); the
+    /// first output and its shape are returned.
+    pub fn run_inputs(&self, inputs: &[(&[f32], &[i64])]) -> Result<(Vec<f32>, Vec<i64>), EngineError> {
+        for (data, shape) in inputs {
+            let expected: i64 = shape.iter().product();
+            if shape.is_empty() || shape.len() > 8 || expected <= 0 || expected as usize != data.len() {
+                return Err(EngineError::InvalidArgument);
+            }
+        }
+        let data: Vec<*const f32> = inputs.iter().map(|(d, _)| d.as_ptr()).collect();
+        let shapes: Vec<*const i64> = inputs.iter().map(|(_, s)| s.as_ptr()).collect();
+        let ranks: Vec<usize> = inputs.iter().map(|(_, s)| s.len()).collect();
+        let mut output: *mut f32 = std::ptr::null_mut();
+        let mut out_shape = [0i64; 8];
+        let mut out_rank = 0usize;
+        // SAFETY: every input pointer and shape is valid for its length for the
+        // call; outputs are writable.
+        status_to_result(unsafe {
+            aibs_ai_run_inputs(
+                self.raw,
+                data.as_ptr(),
+                shapes.as_ptr(),
+                ranks.as_ptr(),
+                inputs.len(),
+                &mut output,
+                out_shape.as_mut_ptr(),
+                &mut out_rank,
+            )
+        })?;
+        let shape = out_shape[..out_rank.min(8)].to_vec();
+        let count: i64 = shape.iter().product();
+        // SAFETY: on success `output` holds `count` engine-allocated floats,
+        // copied and freed once here.
+        let values = unsafe { std::slice::from_raw_parts(output, count.max(0) as usize).to_vec() };
+        // SAFETY: as above.
+        unsafe { aibs_ai_free(output) };
+        Ok((values, shape))
+    }
+
     pub fn run(&self, input: &[f32], shape: &[i64]) -> Result<(Vec<f32>, Vec<i64>), EngineError> {
         let expected: i64 = shape.iter().product();
         if shape.is_empty() || shape.len() > 8 || expected <= 0 || expected as usize != input.len() {
@@ -1110,6 +1227,8 @@ impl Source {
         let mut raw = empty_image();
         let background_raw = background.map(|b| b.raw());
         let background_ptr = background_raw.as_ref().map_or(std::ptr::null(), |b| b as *const BackgroundRaw);
+        let patch_ptrs: Vec<*const PatchRaw> =
+            portrait.map_or(Vec::new(), |p| p.patches.iter().map(|patch| patch.raw as *const PatchRaw).collect());
         let portrait_raw = portrait.map(|p| PortraitRaw {
             faces: p.faces.as_ptr(),
             face_count: p.faces.len().min(MAX_FACES) as u32,
@@ -1120,6 +1239,10 @@ impl Source {
             teeth: p.teeth,
             spots: p.spots.as_ptr(),
             spot_count: p.spots.len().min(MAX_SPOTS) as u32,
+            noise_luminance: p.noise_luminance,
+            noise_color: p.noise_color,
+            patches: patch_ptrs.as_ptr(),
+            patch_count: patch_ptrs.len().min(MAX_PATCHES) as u32,
         });
         let portrait_ptr = portrait_raw.as_ref().map_or(std::ptr::null(), |p| p as *const PortraitRaw);
         let adjustments_ptr = adjustments.map_or(std::ptr::null(), |a| a as *const Adjustments);

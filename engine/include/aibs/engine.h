@@ -116,6 +116,23 @@ typedef struct aibs_spot {
     float x, y, radius;
 } aibs_spot;
 
+/* A patch: replacement pixels (with their own transparency) for a
+ * rectangle of the photo, made by object removal. Created by
+ * aibs_patch_create; read-only after. */
+typedef struct aibs_patch aibs_patch;
+
+/* Create a patch from width x height RGBA8 pixels covering the source
+ * rectangle (x, y, w, h). On success *out must be released with
+ * aibs_patch_free. */
+AIBS_API int32_t aibs_patch_create(const uint8_t* rgba, uint32_t width, uint32_t height, float x, float y, float w,
+                                   float h, aibs_patch** out);
+
+/* Release a patch. Safe on NULL. */
+AIBS_API void aibs_patch_free(aibs_patch* patch);
+
+/* Most patches in one render. */
+#define AIBS_MAX_PATCHES 200
+
 /* Most healing spots in one render. */
 #define AIBS_MAX_SPOTS 500
 
@@ -123,8 +140,9 @@ typedef struct aibs_spot {
  * Portrait retouching applied while rendering, before the colour
  * adjustments. Only colours change: nothing in the photo moves. The face
  * tools need detected faces (with measured skin for smoothing and
- * blemishes); healing spots work anywhere. Healing first, then for each
- * face: blemishes, smoothing, dark circles, eyes, teeth.
+ * blemishes); patches, healing spots and noise reduction work anywhere.
+ * Order: patches (object removal), healing spots, noise reduction, then
+ * for each face: blemishes, smoothing, dark circles, eyes, teeth.
  */
 typedef struct aibs_portrait {
     const aibs_face* faces;
@@ -136,6 +154,10 @@ typedef struct aibs_portrait {
     float teeth;          /* 0..100: teeth whiter (less yellow, brighter) */
     const aibs_spot* spots;
     uint32_t spot_count;  /* at most AIBS_MAX_SPOTS are used */
+    float noise_luminance;  /* 0..100: grain in brightness smoothed (edges kept) */
+    float noise_color;      /* 0..100: coloured blotches smoothed */
+    const aibs_patch* const* patches;
+    uint32_t patch_count;   /* at most AIBS_MAX_PATCHES, applied in order */
 } aibs_portrait;
 
 /* A decoded image; see aibs_source_open below. */
@@ -397,6 +419,11 @@ AIBS_API int32_t aibs_ai_run(aibs_ai_session* session,
                              const float* input, const int64_t* shape, size_t rank,
                              float** output, int64_t* out_shape, size_t* out_rank);
 
+/* Like aibs_ai_run for a model with several inputs: input_count tensors
+ * in the model's input order (each with its shape and rank). */
+AIBS_API int32_t aibs_ai_run_inputs(aibs_ai_session* session, const float* const* inputs,
+                                    const int64_t* const* shapes, const size_t* ranks, size_t input_count,
+                                    float** output, int64_t* out_shape, size_t* out_rank);
 AIBS_API void aibs_ai_free(float* data);
 AIBS_API void aibs_ai_close(aibs_ai_session* session);
 

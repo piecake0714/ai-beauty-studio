@@ -27,6 +27,14 @@ pub struct ExportOptions {
     /// never enlarged.
     #[serde(default)]
     pub long_side: Option<u32>,
+    /// AI enlargement: 1 (none), 2 or 4. When enlarging, `long_side` is
+    /// not used.
+    #[serde(default = "no_upscale")]
+    pub upscale: u32,
+}
+
+fn no_upscale() -> u32 {
+    1
 }
 
 /// Why an export failed. `code()` is the stable identifier for the UI.
@@ -214,12 +222,12 @@ mod tests {
         let clear = image(0);
         assert!(has_transparency(&clear));
         assert!(!has_transparency(&image(255)));
-        let jpeg = encode(&clear, &ExportOptions { format: ExportFormat::Jpeg, quality: 95, long_side: None }).unwrap();
+        let jpeg = encode(&clear, &ExportOptions { format: ExportFormat::Jpeg, quality: 95, long_side: None, upscale: 1 }).unwrap();
         let back = engine_sys::decode_rgba8(&jpeg, 0).unwrap();
         assert!(back.pixels.chunks_exact(4).all(|p| p[0] > 245 && p[1] > 245 && p[2] > 245), "white");
-        let png = encode(&clear, &ExportOptions { format: ExportFormat::Png, quality: 0, long_side: None }).unwrap();
+        let png = encode(&clear, &ExportOptions { format: ExportFormat::Png, quality: 0, long_side: None, upscale: 1 }).unwrap();
         assert_eq!(&png[1..4], b"PNG");
-        assert!(encode(&clear, &ExportOptions { format: ExportFormat::Jpeg, quality: 0, long_side: None }).is_err());
+        assert!(encode(&clear, &ExportOptions { format: ExportFormat::Jpeg, quality: 0, long_side: None, upscale: 1 }).is_err());
     }
 
     #[test]
@@ -292,6 +300,9 @@ mod tests {
         let colour = engine_sys::Adjustments { exposure: 0.3, contrast: 20.0, vibrance: 15.0, ..Default::default() };
         let faces = [face];
         let spots = [Spot { x: 150.0, y: 120.0, radius: 9.0 }, Spot { x: 330.0, y: 200.0, radius: 6.0 }];
+        let patch_pixels: Vec<u8> = (0..20 * 20).flat_map(|i| [200, (i % 20) as u8 * 10, 40, if i % 7 == 0 { 120 } else { 255 }]).collect();
+        let patch = engine_sys::Patch::new(&patch_pixels, 20, 20, [100.0, 150.0, 60.0, 50.0]).unwrap();
+        let patches = [&patch];
         // A look: S curve, a red lift, blue shadows, and a warming LUT.
         let master = [[0.0, 0.0], [0.25, 0.18], [0.75, 0.82], [1.0, 1.0]];
         let red = [[0.0, 0.05], [1.0, 1.0]];
@@ -355,6 +366,9 @@ mod tests {
                     eyes: 60.0,
                     teeth: 60.0,
                     spots: &spots,
+                    noise_luminance: 40.0,
+                    noise_color: 50.0,
+                    patches: &patches,
                 }),
                 Some(&colour),
                 Some(Background {
@@ -486,6 +500,9 @@ mod tests {
                         eyes: 50.0,
                         teeth: 50.0,
                         spots: &spots,
+                        noise_luminance: 30.0,
+                        noise_color: 30.0,
+                        ..Default::default()
                     }),
                     Some(&colour),
                     Some(Background {
@@ -518,7 +535,7 @@ mod tests {
         )
         .unwrap();
         let rendered = started.elapsed();
-        let jpeg = encode(&image, &ExportOptions { format: ExportFormat::Jpeg, quality: 92, long_side: None }).unwrap();
+        let jpeg = encode(&image, &ExportOptions { format: ExportFormat::Jpeg, quality: 92, long_side: None, upscale: 1 }).unwrap();
         let total = started.elapsed();
         println!(
             "info: 12 MP export with every effect on CPU: render {:.1} s, total with JPEG {:.1} s, {} bytes",

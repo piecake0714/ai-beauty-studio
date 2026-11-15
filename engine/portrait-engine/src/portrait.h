@@ -54,6 +54,12 @@ void reduce_blemishes(cv::Mat& image, const cv::Mat& ycrcb, const cv::Mat& mask,
 void retouch_features(cv::Mat& bgr, int first_col, double x, double y, double scale_x, double scale_y,
                       const aibs_portrait& portrait);
 
+/// Extra output pixels needed around a render for noise reduction.
+int noise_margin(const aibs_portrait* portrait, double scale_x, double scale_y);
+
+/// Noise reduction over the whole render (columns from first_col on).
+void reduce_noise(cv::Mat& bgr, int first_col, double scale_x, double scale_y, const aibs_portrait& portrait);
+
 /// Largest healing-spot margin, in output pixels.
 constexpr int kMaxSpotMargin = 1024;
 

@@ -159,6 +159,8 @@ jobs:
               --extra "YuNet face detection model (OpenCV Zoo), MIT|models/licenses/face-yunet.LICENSE.txt" \
               --extra "BiRefNet lite background model (Peng Zheng et al.), MIT|models/licenses/background-birefnet-lite.LICENSE.txt" \
               --extra "Depth Anything V2 Small depth model (Lihe Yang et al.), Apache-2.0|models/licenses/depth-anything-v2-small.LICENSE.txt" \
+              --extra "LaMa inpainting model (Suvorov et al.; ONNX by Carve), Apache-2.0|models/licenses/inpaint-lama.LICENSE.txt" \
+              --extra "Real-ESRGAN x2plus upscaling model (Xintao Wang et al.), BSD-3-Clause|models/licenses/upscale-realesrgan-x2.LICENSE.txt" \
               --out apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.txt
           } 2>&1 | tee ci-logs/5b-notices.txt
 

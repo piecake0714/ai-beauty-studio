@@ -101,6 +101,7 @@ mod tests {
             shape: None,
             models: Default::default(),
             images: &[],
+            patches: &[],
             preview: None,
             saved_at: 42,
         };

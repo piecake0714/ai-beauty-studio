@@ -25,7 +25,7 @@
 
 struct aibs_ai_session {
     std::unique_ptr<Ort::Session> session;
-    std::string input_name;
+    std::vector<std::string> input_names;
     std::vector<std::string> output_names;
 };
 
@@ -143,12 +143,14 @@ int32_t aibs_ai_open(const uint8_t* model, size_t len, int32_t preferred, aibs_a
             session = std::make_unique<Ort::Session>(environment(), model, len, options);
         }
 
-        if (session->GetInputCount() != 1 || session->GetOutputCount() == 0) {
+        if (session->GetInputCount() == 0 || session->GetInputCount() > 8 || session->GetOutputCount() == 0) {
             return AIBS_ERR_MODEL_INVALID;
         }
         Ort::AllocatorWithDefaultOptions allocator;
         auto handle = std::make_unique<aibs_ai_session>();
-        handle->input_name = session->GetInputNameAllocated(0, allocator).get();
+        for (size_t i = 0; i < session->GetInputCount(); ++i) {
+            handle->input_names.push_back(session->GetInputNameAllocated(i, allocator).get());
+        }
         for (size_t o = 0; o < session->GetOutputCount(); ++o) {
             handle->output_names.push_back(session->GetOutputNameAllocated(o, allocator).get());
         }
@@ -170,27 +172,45 @@ namespace aibs {
 
 int32_t run_all_outputs(aibs_ai_session* session, const float* input, const int64_t* shape, size_t rank,
                         std::vector<NamedTensor>& outputs) {
+    return run_inputs(session, &input, &shape, &rank, 1, outputs);
+}
+
+int32_t run_inputs(aibs_ai_session* session, const float* const* inputs, const int64_t* const* shapes,
+                   const size_t* ranks, size_t input_count, std::vector<NamedTensor>& outputs) {
     outputs.clear();
-    if (session == nullptr || input == nullptr || shape == nullptr || rank == 0 || rank > 8) {
+    if (session == nullptr || inputs == nullptr || shapes == nullptr || ranks == nullptr ||
+        input_count != session->input_names.size()) {
         return AIBS_ERR_INVALID_ARGUMENT;
     }
-    size_t count = 1;
-    for (size_t i = 0; i < rank; ++i) {
-        if (shape[i] <= 0 || static_cast<uint64_t>(shape[i]) > std::numeric_limits<size_t>::max() / count) {
+    std::vector<size_t> counts(input_count, 1);
+    for (size_t k = 0; k < input_count; ++k) {
+        if (inputs[k] == nullptr || shapes[k] == nullptr || ranks[k] == 0 || ranks[k] > 8) {
             return AIBS_ERR_INVALID_ARGUMENT;
         }
-        count *= static_cast<size_t>(shape[i]);
+        for (size_t i = 0; i < ranks[k]; ++i) {
+            const int64_t d = shapes[k][i];
+            if (d <= 0 || static_cast<uint64_t>(d) > std::numeric_limits<size_t>::max() / counts[k]) {
+                return AIBS_ERR_INVALID_ARGUMENT;
+            }
+            counts[k] *= static_cast<size_t>(d);
+        }
     }
     try {
         const Ort::MemoryInfo memory = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-        Ort::Value tensor = Ort::Value::CreateTensor<float>(memory, const_cast<float*>(input), count, shape, rank);
-        const char* input_names[] = {session->input_name.c_str()};
+        std::vector<Ort::Value> tensors;
+        std::vector<const char*> input_names;
+        for (size_t k = 0; k < input_count; ++k) {
+            tensors.push_back(Ort::Value::CreateTensor<float>(memory, const_cast<float*>(inputs[k]), counts[k], shapes[k],
+                                                              ranks[k]));
+            input_names.push_back(session->input_names[k].c_str());
+        }
         std::vector<const char*> output_names;
         for (const std::string& name : session->output_names) {
             output_names.push_back(name.c_str());
         }
-        std::vector<Ort::Value> results = session->session->Run(Ort::RunOptions{nullptr}, input_names, &tensor, 1,
-                                                                output_names.data(), output_names.size());
+        std::vector<Ort::Value> results =
+            session->session->Run(Ort::RunOptions{nullptr}, input_names.data(), tensors.data(), tensors.size(),
+                                  output_names.data(), output_names.size());
         for (size_t o = 0; o < results.size(); ++o) {
             if (!results[o].IsTensor()) {
                 return AIBS_ERR_INFERENCE_FAILED;
@@ -217,6 +237,35 @@ int32_t run_all_outputs(aibs_ai_session* session, const float* input, const int6
 }
 
 }  // namespace aibs
+
+namespace {
+
+// Copy the first output into an engine-allocated buffer for the caller.
+int32_t first_output(const std::vector<aibs::NamedTensor>& outputs, float** output, int64_t* out_shape,
+                     size_t* out_rank) {
+    const aibs::NamedTensor& first = outputs.at(0);
+    if (first.shape.size() > 8) return AIBS_ERR_INFERENCE_FAILED;
+    float* buffer = static_cast<float*>(std::malloc(std::max<size_t>(first.data.size(), 1) * sizeof(float)));
+    if (buffer == nullptr) return AIBS_ERR_OUT_OF_MEMORY;
+    std::memcpy(buffer, first.data.data(), first.data.size() * sizeof(float));
+    for (size_t d = 0; d < first.shape.size(); ++d) out_shape[d] = first.shape[d];
+    *out_rank = first.shape.size();
+    *output = buffer;
+    return AIBS_OK;
+}
+
+}  // namespace
+
+int32_t aibs_ai_run_inputs(aibs_ai_session* session, const float* const* inputs, const int64_t* const* shapes,
+                           const size_t* ranks, size_t input_count, float** output, int64_t* out_shape,
+                           size_t* out_rank) {
+    if (output != nullptr) *output = nullptr;
+    if (output == nullptr || out_shape == nullptr || out_rank == nullptr) return AIBS_ERR_INVALID_ARGUMENT;
+    std::vector<aibs::NamedTensor> outputs;
+    const int32_t status = aibs::run_inputs(session, inputs, shapes, ranks, input_count, outputs);
+    if (status != AIBS_OK) return status;
+    return first_output(outputs, output, out_shape, out_rank);
+}
 
 int32_t aibs_ai_run(aibs_ai_session* session, const float* input, const int64_t* shape, size_t rank,
                     float** output, int64_t* out_shape, size_t* out_rank) {

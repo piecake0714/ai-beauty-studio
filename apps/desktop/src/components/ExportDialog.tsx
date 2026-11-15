@@ -19,6 +19,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
     format: transparent ? "png" : "jpeg",
     quality: 92,
     longSide: null,
+    upscale: 1,
   });
 
   const close = () => {
@@ -35,6 +36,11 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   });
 
   const longer = document ? Math.max(document.size.width, document.size.height) : 0;
+  // As the core's limits: at most 16384 a side and 160 million pixels.
+  const fits = (factor: number) =>
+    !!document &&
+    longer * factor <= 16384 &&
+    document.size.width * document.size.height * factor * factor <= 160_000_000;
 
   return (
     <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && close()}>
@@ -94,8 +100,23 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
               </label>
             )}
             <label className="field">
+              <span>{t("export.upscale")}</span>
+              <select
+                value={options.upscale}
+                onChange={(event) => setOptions({ ...options, upscale: Number(event.target.value) as 1 | 2 | 4 })}
+              >
+                {([1, 2, 4] as const).map((factor) => (
+                  <option key={factor} value={factor} disabled={factor > 1 && !fits(factor)}>
+                    {factor === 1 ? t("export.upscaleNone") : t("export.upscaleBy", { factor })}
+                  </option>
+                ))}
+              </select>
+              {options.upscale > 1 && <span className="note">{t("export.upscaleNote")}</span>}
+            </label>
+            <label className="field">
               <span>{t("export.size")}</span>
               <select
+                disabled={options.upscale > 1}
                 value={options.longSide ?? ""}
                 onChange={(event) => setOptions({ ...options, longSide: event.target.value ? Number(event.target.value) : null })}
               >
