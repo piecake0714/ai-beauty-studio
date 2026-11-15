@@ -11,7 +11,8 @@ Windows 桌面相片編輯軟體（開發中）。Tauri 2 + React/TypeScript 介
 - 首頁：開啟影像、最近開啟的檔案（含縮圖）。
 - 編輯器：以完整解析度檢視影像，滾輪縮放（5%–800%）、拖曳平移，顯示影像資訊。
 - 調整（非破壞性，原始檔不會被修改）：曝光、對比、亮部、陰影、白色、黑色、亮度、色溫、色調、自然飽和度、飽和度、HSL 八色區；初學／進階模式；復原／重做；前後對照（分割檢視、按住 `\` 看原圖）。
-- AI 執行環境：ONNX Runtime + DirectML（GPU），不可用時改用 CPU；「設定 → AI 與硬體」可檢視顯示卡並測試。尚無 AI 編輯功能。
+- AI 執行環境：ONNX Runtime + DirectML（GPU），不可用時改用 CPU；「設定 → AI 與硬體」可檢視顯示卡並測試。
+- 人像：開啟影像時自動偵測臉部（YuNet），磨皮滑桿即時作用於臉部膚色；工具列「一鍵增強」自動調整曝光、對比與色彩（一步可復原）。
 - 尚未提供存檔與匯出：調整只存在記憶體中，開啟其他影像或關閉程式前會先詢問。
 - 設定：主題、語言、關於與第三方授權聲明。
 
@@ -37,6 +38,9 @@ Windows 桌面相片編輯軟體（開發中）。Tauri 2 + React/TypeScript 介
 需要：Visual Studio 2022（含 C++ 桌面開發）、CMake、vcpkg、Rust、Node.js 22。
 
 ```powershell
+# 0. 下載第三方模型（不存在 Git 中，會驗證雜湊）
+python scripts/fetch_models.py
+
 # 1. 建置並安裝 C++ 引擎到 engine/dist
 cmake -S engine -B build/engine `
   -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
