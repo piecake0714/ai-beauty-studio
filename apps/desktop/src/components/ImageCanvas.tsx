@@ -2,7 +2,7 @@ import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react
 import { errorCode, type RenderRequest } from "../api";
 import { useApp, useI18n } from "../context";
 import { parseFrame, type Frame } from "../frame";
-import { adjustmentsKey } from "../adjustments";
+import { adjustmentsKey, sameAdjustments } from "../adjustments";
 import type { Adjustments } from "../types";
 import { placeFrame, sameCamera, visibleRegion, type Camera, type Size } from "../view";
 
@@ -10,12 +10,18 @@ import { placeFrame, sameCamera, visibleRegion, type Camera, type Size } from ".
  * asking for a sharp render. Adjustment changes are sent at once. */
 const CAMERA_DELAY_MS = 60;
 
+/** While a slider is being dragged, render at this fraction of the screen
+ * resolution so the picture keeps up; full resolution follows on release. */
+const DRAFT_SCALE = 0.5;
+
 interface Detail {
   canvas: HTMLCanvasElement;
   camera: Camera;
   viewport: Size;
-  /** Adjustments and split the render was made with. */
+  /** Adjustments, split and resolution the render was made with. */
   look: string;
+  /** Rendered at reduced resolution. */
+  draft: boolean;
 }
 
 function frameToCanvas(frame: Frame): HTMLCanvasElement {
@@ -26,8 +32,8 @@ function frameToCanvas(frame: Frame): HTMLCanvasElement {
   return canvas;
 }
 
-function lookKey(adjustments: Adjustments, originalColumns: number): string {
-  return `${adjustmentsKey(adjustments)}|${originalColumns}`;
+function lookKey(adjustments: Adjustments, originalColumns: number, draft: boolean): string {
+  return `${adjustmentsKey(adjustments)}|${originalColumns}|${draft ? "draft" : "full"}`;
 }
 
 function sameViewport(a: Size, b: Size): boolean {
@@ -49,6 +55,7 @@ export function ImageCanvas() {
   const camera = useApp((s) => s.camera);
   const viewport = useApp((s) => s.viewport);
   const live = useApp((s) => s.live);
+  const committed = useApp((s) => s.edit?.adjustments ?? null);
   const splitView = useApp((s) => s.splitView);
   const split = useApp((s) => s.split);
   const holdOriginal = useApp((s) => s.holdOriginal);
@@ -75,10 +82,12 @@ export function ImageCanvas() {
   void split;
   void holdOriginal;
   const columns = viewport ? originalColumns(viewport.width) : 0;
-  const look = lookKey(live, columns);
+  // Uncommitted adjustments mean a slider is being dragged.
+  const draft = committed !== null && !sameAdjustments(live, committed);
+  const look = lookKey(live, columns, draft);
   // Latest values for callbacks that outlive this render.
-  const latestRef = useRef({ document, camera, viewport, live, columns, look });
-  latestRef.current = { document, camera, viewport, live, columns, look };
+  const latestRef = useRef({ document, camera, viewport, live, columns, look, draft });
+  latestRef.current = { document, camera, viewport, live, columns, look, draft };
 
   // Track the canvas size in device pixels.
   useEffect(() => {
@@ -136,8 +145,8 @@ export function ImageCanvas() {
     }
     if (detail) {
       const place = placeFrame(detail.camera, detail.viewport, camera, viewport);
-      // Pixel-exact when drawn 1:1; smoothed while moved or scaled.
-      context.imageSmoothingEnabled = !coversView;
+      // Pixel-exact when drawn 1:1; smoothed while moved, scaled or a draft.
+      context.imageSmoothingEnabled = !coversView || detail.draft;
       context.drawImage(detail.canvas, place.x, place.y, place.width, place.height);
     }
   }
@@ -145,17 +154,21 @@ export function ImageCanvas() {
   /** Send a render of the current view unless one is in flight; the
    * finished render calls this again if the view changed meanwhile. */
   function sendRender() {
-    const { document, camera, viewport, live, columns, look } = latestRef.current;
+    const { document, camera, viewport, live, columns, look, draft } = latestRef.current;
     if (!document || !camera || !viewport || inFlightRef.current) return;
     if (detailMatches(detailRef.current)) {
       setRendering(false);
       return;
     }
+    const region = visibleRegion(camera, viewport);
+    const scale = draft ? DRAFT_SCALE : 1;
     const request: RenderRequest = {
       id: ++requestIdRef.current,
-      ...visibleRegion(camera, viewport),
+      ...region,
+      outWidth: Math.max(1, Math.round(region.outWidth * scale)),
+      outHeight: Math.max(1, Math.round(region.outHeight * scale)),
       adjustments: live,
-      originalColumns: columns,
+      originalColumns: Math.round(columns * scale),
     };
     const documentId = document.id;
     inFlightRef.current = true;
@@ -164,7 +177,7 @@ export function ImageCanvas() {
       .renderView(request)
       .then((buffer) => {
         if (latestRef.current.document?.id !== documentId) return;
-        detailRef.current = { canvas: frameToCanvas(parseFrame(buffer)), camera, viewport, look };
+        detailRef.current = { canvas: frameToCanvas(parseFrame(buffer)), camera, viewport, look, draft };
         requestAnimationFrame(draw);
       })
       .catch((reason) => {
