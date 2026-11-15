@@ -120,7 +120,14 @@ jobs:
           if-no-files-found: error
 
       - name: Collect license data
-        run: python scripts/collect_licenses.py ci-out/licenses 2>&1 | tee ci-logs/8-licenses.txt
+        run: |
+          python scripts/collect_licenses.py ci-out/licenses 2>&1 | tee ci-logs/8-licenses.txt
+          # Upstream copyright files of the C++ packages, for manual review.
+          mkdir -p ci-out/licenses/vcpkg-copyright
+          for d in build/engine/vcpkg_installed/x64-windows-static-md/share/*/; do
+            port="$(basename "$d")"
+            [ -f "$d/copyright" ] && cp "$d/copyright" "ci-out/licenses/vcpkg-copyright/$port.txt"
+          done
 
       # Publishes a trimmed copy of each step's log, plus the generated
       # lockfiles, to the `ci-logs` branch so build results can be read
