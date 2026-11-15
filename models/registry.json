@@ -54,7 +54,7 @@
       "id": "background-birefnet-lite",
       "version": "general-bb_swin_v1_tiny-epoch_232",
       "file": "files/BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
-      "sha256": "unpinned",
+      "sha256": "5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333",
       "purpose": "Subject/background separation (BiRefNet lite, general use)",
       "input": {
         "name": "input_image",
