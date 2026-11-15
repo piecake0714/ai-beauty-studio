@@ -125,7 +125,8 @@ aibs_shape* make_shape(const cv::Mat& depth_in, int source_width, int source_hei
         }
     }
     const int guard = std::max(2, longer / 256);
-    cv::dilate(jump, jump, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2 * guard + 1, 2 * guard + 1)));
+    // Widen the jump to cover the blurred tails on both sides, then soften.
+    cv::dilate(jump, jump, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(4 * guard + 1, 4 * guard + 1)));
     jump = box(jump, guard);
 
     auto* shape = new aibs_shape();
