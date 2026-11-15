@@ -438,9 +438,11 @@ void reduce_noise(cv::Mat& bgr, int first_col, double scale_x, double scale_y, c
     const NoiseRadii r = noise_radii(portrait, std::sqrt(scale_x * scale_y));
     if (r.luminance == 0 && r.colour == 0) return;
     const double l = strength_of(portrait.noise_luminance), c = strength_of(portrait.noise_color);
+    // Filter the whole buffer (its margin gives the neighbours), change
+    // only the columns from first_col on.
     const cv::Rect roi(first_col, 0, bgr.cols - first_col, bgr.rows);
     cv::Mat ycrcb;
-    cv::cvtColor(bgr(roi), ycrcb, cv::COLOR_BGR2YCrCb);
+    cv::cvtColor(bgr, ycrcb, cv::COLOR_BGR2YCrCb);
     ycrcb.convertTo(ycrcb, CV_32FC3, 1.0 / 255.0);
     std::vector<cv::Mat> planes;
     cv::split(ycrcb, planes);
@@ -463,7 +465,7 @@ void reduce_noise(cv::Mat& bgr, int first_col, double scale_x, double scale_y, c
     cv::Mat y8, out;
     ycrcb.convertTo(y8, CV_8UC3, 255.0);
     cv::cvtColor(y8, out, cv::COLOR_YCrCb2BGR);
-    out.copyTo(bgr(roi));
+    out(roi).copyTo(bgr(roi));
 }
 
 }  // namespace aibs
