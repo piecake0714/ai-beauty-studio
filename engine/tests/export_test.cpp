@@ -62,8 +62,16 @@ void test_png_round_trip_keeps_pixels_and_alpha() {
 }
 
 void test_jpeg_quality_and_limits() {
+    // A smooth photo-like gradient with a sharp colour edge in the middle.
     const uint32_t w = 64, h = 48;
-    const std::vector<uint8_t> rgb = pattern(w, h, 3);
+    std::vector<uint8_t> rgb(static_cast<size_t>(w) * h * 3);
+    for (uint32_t y = 0; y < h; ++y)
+        for (uint32_t x = 0; x < w; ++x) {
+            uint8_t* p = &rgb[(static_cast<size_t>(y) * w + x) * 3];
+            p[0] = static_cast<uint8_t>(x < w / 2 ? 200 : 40 + x);
+            p[1] = static_cast<uint8_t>(60 + y * 2);
+            p[2] = static_cast<uint8_t>(x < w / 2 ? 50 : 180);
+        }
     Buffer high, low;
     CHECK(aibs_encode(rgb.data(), w, h, 3, AIBS_FORMAT_JPEG, 95, &high.b) == AIBS_OK);
     CHECK(aibs_encode(rgb.data(), w, h, 3, AIBS_FORMAT_JPEG, 20, &low.b) == AIBS_OK);
@@ -81,7 +89,7 @@ void test_jpeg_quality_and_limits() {
         CHECK(error < 4.0);
     }
     Buffer refused;
-    const std::vector<uint8_t> rgba = pattern(w, h, 4);
+    const std::vector<uint8_t> rgba(static_cast<size_t>(w) * h * 4, 128);
     CHECK(aibs_encode(rgba.data(), w, h, 4, AIBS_FORMAT_JPEG, 90, &refused.b) == AIBS_ERR_INVALID_ARGUMENT);
     CHECK(aibs_encode(rgb.data(), w, h, 3, AIBS_FORMAT_JPEG, 0, &refused.b) == AIBS_ERR_INVALID_ARGUMENT);
     CHECK(aibs_encode(rgb.data(), w, h, 3, 9, 90, &refused.b) == AIBS_ERR_INVALID_ARGUMENT);

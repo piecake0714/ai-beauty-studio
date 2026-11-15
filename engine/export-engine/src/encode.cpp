@@ -39,6 +39,12 @@ int32_t aibs_encode(const uint8_t* pixels, uint32_t width, uint32_t height, uint
         std::vector<int> params;
         if (jpeg) {
             params = {cv::IMWRITE_JPEG_QUALITY, static_cast<int>(quality), cv::IMWRITE_JPEG_OPTIMIZE, 1};
+            if (quality >= 90) {
+                // Full colour resolution at high quality, so colour edges
+                // (a subject against a new background) stay sharp.
+                params.push_back(cv::IMWRITE_JPEG_SAMPLING_FACTOR);
+                params.push_back(cv::IMWRITE_JPEG_SAMPLING_FACTOR_444);
+            }
         } else {
             params = {cv::IMWRITE_PNG_COMPRESSION, 6};
         }
