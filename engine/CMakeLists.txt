@@ -43,6 +43,11 @@ add_library(aibs_engine SHARED
 target_include_directories(aibs_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_definitions(aibs_engine PRIVATE AIBS_BUILD)
 target_link_libraries(aibs_engine PRIVATE opencv_core opencv_imgproc opencv_imgcodecs onnxruntime dxgi)
+if(MSVC)
+    # Loaded explicitly from the engine's folder at first use (session.cpp).
+    target_link_options(aibs_engine PRIVATE "/DELAYLOAD:onnxruntime.dll")
+    target_link_libraries(aibs_engine PRIVATE delayimp)
+endif()
 
 if(MSVC)
     target_compile_options(aibs_engine PRIVATE /W4 /WX /utf-8)

@@ -4,8 +4,11 @@
 //! byte buffers to the engine. Original files are opened read-only and are
 //! never written.
 
+pub mod ai;
 pub mod document;
 pub mod info;
+pub mod jobs;
+pub mod models;
 pub mod settings;
 
 use std::fmt;

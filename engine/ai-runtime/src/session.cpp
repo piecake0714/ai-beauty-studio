@@ -13,9 +13,13 @@
 #include <string>
 #include <vector>
 
+// The C++ API's global API pointer is set up by us after the runtime DLL is
+// loaded from the right folder (see load_runtime), not at program start.
+#define ORT_API_MANUAL_INIT
 #include <onnxruntime_cxx_api.h>
 #if defined(_WIN32)
 #include <dml_provider_factory.h>
+#include <windows.h>
 #endif
 
 struct aibs_ai_session {
@@ -25,6 +29,48 @@ struct aibs_ai_session {
 };
 
 namespace {
+
+#if defined(_WIN32)
+// Folder containing this engine DLL.
+std::wstring engine_folder() {
+    HMODULE self = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       reinterpret_cast<LPCWSTR>(&engine_folder), &self);
+    std::wstring path(32768, L'\0');
+    const DWORD n = GetModuleFileNameW(self, path.data(), static_cast<DWORD>(path.size()));
+    path.resize(n);
+    const size_t slash = path.find_last_of(L"\\/");
+    return slash == std::wstring::npos ? std::wstring() : path.substr(0, slash + 1);
+}
+#endif
+
+/*
+ * Load ONNX Runtime and DirectML from the engine's own folder.
+ *
+ * Windows ships its own (older) onnxruntime.dll and DirectML.dll in
+ * System32, which the normal DLL search would find before ours whenever
+ * the program's folder does not hold them (for example test runners).
+ * onnxruntime.dll is delay-loaded by the build; loading both by full path
+ * first makes every later lookup by name return our copies.
+ */
+bool load_runtime() {
+    static const bool loaded = [] {
+#if defined(_WIN32)
+        const std::wstring folder = engine_folder();
+        LoadLibraryExW((folder + L"DirectML.dll").c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+        if (LoadLibraryExW((folder + L"onnxruntime.dll").c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH) == nullptr) {
+            return false;
+        }
+#endif
+        const OrtApi* api = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+        if (api == nullptr) {
+            return false;  // the loaded runtime is older than the headers
+        }
+        Ort::InitApi(api);
+        return true;
+    }();
+    return loaded;
+}
 
 Ort::Env& environment() {
     // One ONNX Runtime environment for the whole process.
@@ -50,7 +96,7 @@ Ort::SessionOptions base_options() {
 }  // namespace
 
 const char* aibs_ai_runtime_version(void) {
-    return OrtGetApiBase()->GetVersionString();
+    return load_runtime() ? OrtGetApiBase()->GetVersionString() : "unavailable";
 }
 
 int32_t aibs_ai_open(const uint8_t* model, size_t len, int32_t preferred, aibs_ai_session** out,
@@ -64,6 +110,10 @@ int32_t aibs_ai_open(const uint8_t* model, size_t len, int32_t preferred, aibs_a
     if (model == nullptr || len == 0 ||
         (preferred != AIBS_PROVIDER_CPU && preferred != AIBS_PROVIDER_DIRECTML)) {
         return AIBS_ERR_INVALID_ARGUMENT;
+    }
+    if (!load_runtime()) {
+        copy_note("ONNX Runtime could not be loaded from the application folder", note, note_len);
+        return AIBS_ERR_INTERNAL;
     }
 
     try {

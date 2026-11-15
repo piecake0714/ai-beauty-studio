@@ -6,13 +6,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use application_core::ai::{self, Hardware};
 use application_core::document::{Adjustments, EditState, History};
+use application_core::jobs::{JobError, Jobs};
+use application_core::models::Registry;
 use application_core::info::{self, FileInfo};
 use application_core::settings::{self, EditorMode, LanguagePreference, Settings, ThemePreference};
 use application_core::{EngineError, Source};
 use tauri::ipc::Response;
 use tauri::path::BaseDirectory;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 /// Longer side of the overview frame sent when an image opens. The canvas
 /// shows it immediately, then asks for sharp renders of what is on screen.
@@ -42,6 +45,10 @@ struct AppState {
     document: Mutex<Option<OpenDocument>>,
     /// Highest render request id seen; older requests are dropped unanswered.
     latest_render: AtomicU64,
+    /// Background work; updates go to the UI as "job-update" events.
+    jobs: Arc<Jobs>,
+    /// Folder holding the model registry (bundled with the app).
+    models_dir: PathBuf,
 }
 
 impl AppState {
@@ -253,6 +260,28 @@ fn redo(state: State<'_, AppState>) -> Result<EditState, String> {
     })
 }
 
+#[tauri::command]
+fn hardware_info() -> Hardware {
+    ai::hardware()
+}
+
+/// Run the AI self-test in the background; progress and the report arrive
+/// as "job-update" events. Returns the job id.
+#[tauri::command]
+fn start_ai_self_test(state: State<'_, AppState>) -> u64 {
+    let models_dir = state.models_dir.clone();
+    state.jobs.start(move |ctx| {
+        let registry = Registry::load(&models_dir).map_err(|e| JobError::new(e.code(), e.to_string()))?;
+        let report = ai::self_test(&registry, ctx, 1024)?;
+        serde_json::to_value(report).map_err(|e| JobError::new("internal", e.to_string()))
+    })
+}
+
+#[tauri::command]
+fn cancel_job(id: u64, state: State<'_, AppState>) -> bool {
+    state.jobs.cancel(id)
+}
+
 /// Decode a small preview of a file for the recent-files list.
 #[tauri::command]
 async fn thumbnail(path: String) -> Result<Response, String> {
@@ -314,12 +343,19 @@ fn main() {
         .setup(|app| {
             let settings_path = app.path().app_config_dir()?.join("settings.json");
             let loaded = settings::load(&settings_path);
+            let models_dir = app.path().resolve("models", BaseDirectory::Resource)?;
+            let handle = app.handle().clone();
+            let jobs = Jobs::new(move |update| {
+                let _ = handle.emit("job-update", update);
+            });
             app.manage(AppState {
                 settings_path,
                 settings: Mutex::new(loaded.settings),
                 settings_recovered: loaded.recovered_from_damage,
                 document: Mutex::new(None),
                 latest_render: AtomicU64::new(0),
+                jobs,
+                models_dir,
             });
             Ok(())
         })
@@ -338,6 +374,9 @@ fn main() {
             set_theme,
             set_language,
             set_editor_mode,
+            hardware_info,
+            start_ai_self_test,
+            cancel_job,
             remove_recent,
             clear_recent,
             third_party_notices,

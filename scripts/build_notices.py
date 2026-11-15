@@ -5,6 +5,8 @@ Inputs, all produced by a normal build:
   --vcpkg-share   <vcpkg_installed>/<triplet>/share (one folder per C++ package)
   --node-modules  apps/desktop/node_modules
   --npm-lock      apps/desktop/package-lock.json (decides which npm packages ship)
+  --extra         "Title|path" of another shipped component's license text;
+                  may be given several times (e.g. ONNX Runtime, DirectML)
   --out           output file
 
 Fails (exit code 1) when any shipped component has no license text, so a
@@ -89,11 +91,20 @@ def main():
     parser.add_argument("--vcpkg-share", required=True)
     parser.add_argument("--node-modules", required=True)
     parser.add_argument("--npm-lock", required=True)
+    parser.add_argument("--extra", action="append", default=[])
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
     problems = []
+    extras = []
+    for item in args.extra:
+        title, _, path = item.partition("|")
+        if not os.path.isfile(path):
+            problems.append(f"license file for {title} not found: {path}")
+            continue
+        extras.append((title, "Runtime library shipped with the application", read_text(path)))
     groups = [
+        ("Runtime libraries", extras),
         ("Rust libraries", cargo_sections(args.cargo_about, problems)),
         ("C++ libraries", vcpkg_sections(args.vcpkg_share, problems)),
         ("JavaScript libraries", npm_sections(args.node_modules, args.npm_lock, problems)),

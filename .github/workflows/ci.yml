@@ -137,6 +137,10 @@ jobs:
               --vcpkg-share build/engine/vcpkg_installed/x64-windows-static-md/share \
               --node-modules apps/desktop/node_modules \
               --npm-lock apps/desktop/package-lock.json \
+              --extra "ONNX Runtime 1.24.4|build/packages/ort/LICENSE" \
+              --extra "ONNX Runtime 1.24.4 third-party notices|build/packages/ort/ThirdPartyNotices.txt" \
+              --extra "DirectML 1.15.4 (Microsoft Software License Terms)|build/packages/dml/LICENSE.txt" \
+              --extra "DirectML 1.15.4 third-party notices|build/packages/dml/ThirdPartyNotices.txt" \
               --out apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.txt
           } 2>&1 | tee ci-logs/5b-notices.txt
 

@@ -54,6 +54,10 @@ function fakeApi(overrides: Partial<Api> = {}): Api {
       index = Math.min(states.length - 1, index + 1);
       return editState();
     }),
+    hardwareInfo: vi.fn(async () => ({ gpus: [], runtimeVersion: "1.24.4" })),
+    startAiSelfTest: vi.fn(async () => 1),
+    cancelJob: vi.fn(async () => true),
+    onJobUpdate: vi.fn(async () => () => {}),
     confirm: vi.fn(async () => true),
     onCloseRequested: vi.fn(async () => () => {}),
     thumbnail: vi.fn(async () => frameBuffer(2, 2)),

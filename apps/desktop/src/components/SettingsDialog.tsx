@@ -3,6 +3,7 @@ import { errorCode } from "../api";
 import { useApp, useI18n } from "../context";
 import { errorMessage } from "../i18n";
 import type { LanguagePreference, ThemePreference } from "../types";
+import { AiSection } from "./AiSection";
 
 type Notices = { kind: "loading" } | { kind: "ready"; text: string } | { kind: "failed"; code: string };
 
@@ -129,6 +130,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 { value: "en", label: "English" },
               ]}
             />
+            <AiSection />
             <section className="about">
               <h2>{t("settings.about")}</h2>
               <p>

@@ -656,3 +656,52 @@ input:focus-visible {
   border-radius: 50%;
   vertical-align: middle;
 }
+
+/* AI and hardware section in Settings */
+.ai-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ai-section p {
+  margin: 0;
+}
+
+.gpu-list ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.small-text {
+  font-size: 0.85rem;
+}
+
+.job-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.job-row progress {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.result {
+  padding: 8px 12px;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.result.ok {
+  background: var(--info-bg);
+  color: var(--info-text);
+}
+
+.result.bad {
+  background: var(--error-bg);
+  color: var(--error-text);
+}

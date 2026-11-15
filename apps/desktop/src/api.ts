@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask, open } from "@tauri-apps/plugin-dialog";
 import type {
@@ -11,6 +12,7 @@ import type {
   Startup,
   ThemePreference,
 } from "./types";
+import type { Hardware, JobUpdate } from "./jobs";
 
 /**
  * Everything the UI asks of the Rust core. The store depends on this
@@ -33,6 +35,12 @@ export interface Api {
   commitAdjustments(adjustments: Adjustments): Promise<EditState>;
   undo(): Promise<EditState>;
   redo(): Promise<EditState>;
+  hardwareInfo(): Promise<Hardware>;
+  /** Start the AI self-test; resolves to its job id. */
+  startAiSelfTest(): Promise<number>;
+  cancelJob(id: number): Promise<boolean>;
+  /** Receive background job updates; resolves to a function that stops listening. */
+  onJobUpdate(handler: (update: JobUpdate) => void): Promise<() => void>;
   /** Ask a yes/no question; resolves true for yes. */
   confirm(title: string, message: string, yes: string, no: string): Promise<boolean>;
   /** Call `allowClose` when the user closes the window; closing is cancelled when it resolves false. */
@@ -82,6 +90,10 @@ export const tauriApi: Api = {
   commitAdjustments: (adjustments) => invoke("commit_adjustments", { adjustments }),
   undo: () => invoke("undo"),
   redo: () => invoke("redo"),
+  hardwareInfo: () => invoke("hardware_info"),
+  startAiSelfTest: () => invoke("start_ai_self_test"),
+  cancelJob: (id) => invoke("cancel_job", { id }),
+  onJobUpdate: (handler) => listen<JobUpdate>("job-update", (event) => handler(event.payload)),
   confirm: (title, message, yes, no) => ask(message, { title, kind: "warning", okLabel: yes, cancelLabel: no }),
   async onCloseRequested(allowClose) {
     return getCurrentWindow().onCloseRequested(async (event) => {

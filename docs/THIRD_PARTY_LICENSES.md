@@ -19,6 +19,13 @@ vcpkg 的 SPDX 檔對這 8 個套件的授權欄位都是 `NOASSERTION`，因此
 | liblzma（xz） | 5.8.4 | 0BSD（xz 套件中的 GPL／LGPL 部分只適用於命令列工具與腳本，未出貨） | ☑ |
 | zlib | 1.3.2#2 | Zlib | ☑ |
 
+## AI 執行環境（隨安裝程式出貨的 DLL）
+
+| 元件 | 鎖定版本 | 授權 | 來源與核對 |
+| --- | --- | --- | --- |
+| ONNX Runtime（Microsoft.ML.OnnxRuntime.DirectML） | 1.24.4，NuGet 套件 SHA-256 `57e9f11b…d788681` | MIT | 套件內 `LICENSE`；其第三方聲明 `ThirdPartyNotices.txt` 一併收入聲明檔 |
+| DirectML（Microsoft.AI.DirectML） | 1.15.4，NuGet 套件 SHA-256 `4e7cb7dd…3615b9` | Microsoft Software License Terms for DirectML | 條款允許將其複製並散布於自行開發的應用程式中，不得單獨散布、不得移除 Microsoft 聲明（[授權頁面](https://www.nuget.org/packages/Microsoft.AI.DirectML/1.15.4/License)）；`LICENSE.txt` 與 `ThirdPartyNotices.txt` 一併收入聲明檔 |
+
 ## Rust 套件（連結進主程式）
 
 共 207 個外部套件（另有本專案自己的套件，不對外發布）。清單以 cargo-about 依實際啟用的 features 計算為準，與 CI run 43674211393 實際編譯的套件一致；完整授權全文收錄在隨產品出貨的 `THIRD_PARTY_NOTICES.txt`。
