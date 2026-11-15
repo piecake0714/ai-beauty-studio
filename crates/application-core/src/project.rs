@@ -681,6 +681,7 @@ mod tests {
             shape: None,
             images: vec![],
             preview: None,
+            patches: vec![],
         })
         .unwrap();
         assert_eq!(migrate(value.clone()).err().unwrap().code(), "project_newer_version");
