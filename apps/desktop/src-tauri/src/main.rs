@@ -183,7 +183,7 @@ async fn open_image(path: String, app: tauri::AppHandle, state: State<'_, AppSta
                 document.faces_status = status.clone();
                 let _ = app.emit("faces", FacesEvent { serial, status });
             }
-        }
+        };
     });
     // The image opened; failing to save the recent list must not block it.
     let _ = state.update(|s| s.add_recent(&path, now_seconds()));
