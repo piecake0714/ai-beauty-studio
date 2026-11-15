@@ -12,6 +12,7 @@ int main() {
     run_background_tests();
     run_light_tests();
     run_export_tests();
+    run_layer_tests();
     if (g_failures == 0) {
         std::printf("all engine tests passed (engine %s)\n", aibs_engine_version());
         return 0;

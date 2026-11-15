@@ -144,6 +144,26 @@ cv::Mat warp_plane(const cv::Mat& plane, double fx, double fy, double x, double 
     return out;
 }
 
+int32_t render_cover(const aibs_source& image, int photo_width, int photo_height, double x, double y,
+                     double scale_x, double scale_y, int cols, int rows, cv::Mat& out) {
+    if (image.levels.empty()) return AIBS_ERR_INVALID_ARGUMENT;
+    // Scale the image to cover the whole photo, centred.
+    const cv::Mat& other = image.levels[0];
+    const double cover = std::max(static_cast<double>(photo_width) / other.cols,
+                                  static_cast<double>(photo_height) / other.rows);
+    const double off_x = (photo_width - other.cols * cover) / 2;
+    const double off_y = (photo_height - other.rows * cover) / 2;
+    Image rendered;
+    const int32_t status = aibs_source_render(&image, (x - off_x) / cover, (y - off_y) / cover, cols / scale_x / cover,
+                                              rows / scale_y / cover, static_cast<uint32_t>(cols),
+                                              static_cast<uint32_t>(rows), nullptr, nullptr, nullptr, nullptr, nullptr,
+                                              0, 0, &rendered.img);
+    if (status != AIBS_OK) return status;
+    const cv::Mat rgba(rows, cols, CV_8UC4, rendered.img.data);
+    cv::cvtColor(rgba, out, cv::COLOR_RGBA2BGR);
+    return AIBS_OK;
+}
+
 bool background_active(const aibs_background* background) {
     if (background == nullptr || background->matte == nullptr || background->matte->coverage.empty()) return false;
     if (background->mode == AIBS_BG_ORIGINAL) {
@@ -232,20 +252,9 @@ int32_t composite_background(cv::Mat& bgr, int first_col, double x, double y, do
         }
         case AIBS_BG_IMAGE: {
             if (background.image == nullptr || background.image->levels.empty()) return AIBS_ERR_INVALID_ARGUMENT;
-            // Scale the new background to cover the whole photo, centred.
-            const cv::Mat& other = background.image->levels[0];
-            const double cover = std::max(static_cast<double>(matte.source_width) / other.cols,
-                                          static_cast<double>(matte.source_height) / other.rows);
-            const double off_x = (matte.source_width - other.cols * cover) / 2;
-            const double off_y = (matte.source_height - other.rows * cover) / 2;
-            Image rendered;
-            const int32_t status = aibs_source_render(
-                background.image, (x - off_x) / cover, (y - off_y) / cover, bgr.cols / scale_x / cover,
-                bgr.rows / scale_y / cover, static_cast<uint32_t>(bgr.cols), static_cast<uint32_t>(bgr.rows), nullptr,
-                nullptr, nullptr, nullptr, 0, &rendered.img);
+            const int32_t status = render_cover(*background.image, matte.source_width, matte.source_height, x, y,
+                                                scale_x, scale_y, bgr.cols, bgr.rows, layer);
             if (status != AIBS_OK) return status;
-            const cv::Mat rgba(bgr.rows, bgr.cols, CV_8UC4, rendered.img.data);
-            cv::cvtColor(rgba, layer, cv::COLOR_RGBA2BGR);
             break;
         }
         default:
@@ -319,7 +328,7 @@ int32_t aibs_segment(const aibs_source* source, aibs_ai_session* model, aibs_mat
         // The model sees the whole image stretched to 1024 x 1024.
         Image input_image;
         int32_t status = aibs_source_render(source, 0, 0, full.cols, full.rows, kModelSize, kModelSize, nullptr,
-                                            nullptr, nullptr, nullptr, 0, &input_image.img);
+                                            nullptr, nullptr, nullptr, nullptr, 0, 0, &input_image.img);
         if (status != AIBS_OK) return status;
 
         // 1 x 3 x 1024 x 1024, planes R, G, B, ImageNet normalisation.

@@ -48,6 +48,8 @@ extern "C" {
         adjustments: *const Adjustments,
         background: *const BackgroundRaw,
         light: *const LightRaw,
+        layers: *const LayerRaw,
+        layer_count: u32,
         original_columns: u32,
         out: *mut AibsImage,
     ) -> i32;
@@ -526,6 +528,139 @@ impl Shape {
     }
 }
 
+/// How a layer's colours combine with what is below.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlendMode {
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    SoftLight,
+    Darken,
+    Lighten,
+    Difference,
+}
+
+/// What a layer's mask starts as, before strokes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaskBase {
+    All,
+    None,
+    Subject,
+    Background,
+}
+
+/// A brush stroke on a layer mask.
+#[derive(Debug, Clone, Copy)]
+pub struct Stroke<'a> {
+    /// x, y pairs in source pixels.
+    pub points: &'a [f32],
+    /// Brush diameter in source pixels.
+    pub size: f32,
+    /// 0 (soft) .. 1 (hard).
+    pub hardness: f32,
+    /// 0..1.
+    pub opacity: f32,
+    pub erase: bool,
+}
+
+/// What a layer puts on top.
+#[derive(Debug, Clone, Copy)]
+pub enum LayerContent<'a> {
+    /// Local light and colour adjustments.
+    Adjustment(&'a Adjustments),
+    /// Another image, scaled to cover the photo.
+    Image(&'a Source),
+}
+
+/// One layer, applied over everything below it.
+#[derive(Debug, Clone, Copy)]
+pub struct Layer<'a> {
+    pub content: LayerContent<'a>,
+    pub blend: BlendMode,
+    /// 0..1.
+    pub opacity: f32,
+    pub mask_base: MaskBase,
+    pub mask_invert: bool,
+    /// For the subject and background mask bases.
+    pub matte: Option<&'a Matte>,
+    pub strokes: &'a [Stroke<'a>],
+}
+
+#[repr(C)]
+struct StrokeRaw {
+    points: *const f32,
+    point_count: u32,
+    size: f32,
+    hardness: f32,
+    opacity: f32,
+    erase: u32,
+}
+
+#[repr(C)]
+struct LayerRaw {
+    kind: u32,
+    blend: u32,
+    opacity: f32,
+    mask_base: u32,
+    mask_invert: u32,
+    matte: *const MatteRaw,
+    adjustments: *const Adjustments,
+    image: *const AibsSourceRaw,
+    strokes: *const StrokeRaw,
+    stroke_count: u32,
+}
+
+/// Raw layers and the stroke arrays they point into; kept alive together
+/// for the duration of a render.
+struct RawLayers {
+    layers: Vec<LayerRaw>,
+    _strokes: Vec<Vec<StrokeRaw>>,
+}
+
+fn raw_layers(layers: &[Layer<'_>]) -> RawLayers {
+    let strokes: Vec<Vec<StrokeRaw>> = layers
+        .iter()
+        .map(|layer| {
+            layer
+                .strokes
+                .iter()
+                .map(|s| StrokeRaw {
+                    points: s.points.as_ptr(),
+                    point_count: (s.points.len() / 2) as u32,
+                    size: s.size,
+                    hardness: s.hardness,
+                    opacity: s.opacity,
+                    erase: s.erase as u32,
+                })
+                .collect()
+        })
+        .collect();
+    let raw = layers
+        .iter()
+        .zip(&strokes)
+        .map(|(layer, strokes)| {
+            let (kind, adjustments, image) = match layer.content {
+                LayerContent::Adjustment(a) => (0, a as *const Adjustments, std::ptr::null()),
+                LayerContent::Image(source) => (1, std::ptr::null(), source.raw as *const AibsSourceRaw),
+            };
+            LayerRaw {
+                kind,
+                blend: layer.blend as u32,
+                opacity: layer.opacity,
+                mask_base: layer.mask_base as u32,
+                mask_invert: layer.mask_invert as u32,
+                matte: layer.matte.map_or(std::ptr::null(), |m| m.raw as *const MatteRaw),
+                adjustments,
+                image,
+                strokes: strokes.as_ptr(),
+                stroke_count: strokes.len() as u32,
+            }
+        })
+        .collect();
+    RawLayers { layers: raw, _strokes: strokes }
+}
+
 /// Most faces reported for one photo.
 pub const MAX_FACES: usize = 32;
 
@@ -790,7 +925,7 @@ impl Source {
         out_width: u32,
         out_height: u32,
     ) -> Result<RgbaImage, EngineError> {
-        self.render_adjusted(x, y, w, h, out_width, out_height, None, None, None, None, 0)
+        self.render_adjusted(x, y, w, h, out_width, out_height, None, None, None, None, &[], 0)
     }
 
     /// Like [`Source::render`], applying portrait retouching, then
@@ -809,8 +944,10 @@ impl Source {
         adjustments: Option<&Adjustments>,
         background: Option<Background<'_>>,
         light: Option<Light<'_>>,
+        layers: &[Layer<'_>],
         original_columns: u32,
     ) -> Result<RgbaImage, EngineError> {
+        let raw_layers = raw_layers(layers);
         let light_raw = light.map(|l| l.raw());
         let light_ptr = light_raw.as_ref().map_or(std::ptr::null(), |l| l as *const LightRaw);
         let mut raw = empty_image();
@@ -838,6 +975,8 @@ impl Source {
                 adjustments_ptr,
                 background_ptr,
                 light_ptr,
+                raw_layers.layers.as_ptr(),
+                raw_layers.layers.len() as u32,
                 original_columns,
                 &mut raw,
             )
@@ -1047,14 +1186,14 @@ mod tests {
         let original = source.render(0.0, 0.0, 64.0, 48.0, 64, 48).unwrap();
         let zero = Adjustments::default();
         let unchanged = source
-            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&zero), None, None, 0)
+            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&zero), None, None, &[], 0)
             .unwrap();
         assert_eq!(unchanged.pixels, original.pixels);
 
         let mut look = Adjustments { exposure: -1.0, saturation: 40.0, ..Default::default() };
         look.hsl_hue[0] = 50.0;
         let split = source
-            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&look), None, None, 32)
+            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&look), None, None, &[], 32)
             .unwrap();
         for col in [0usize, 31, 32, 63] {
             let p = (10 * 64 + col) * 4;
@@ -1125,7 +1264,7 @@ mod tests {
         let source = Source::open(PNG).unwrap();
         let plain = source.render(0.0, 0.0, 64.0, 48.0, 64, 48).unwrap();
         let portrait = Portrait { faces: &[], smoothing: 100.0 };
-        let with = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, Some(portrait), None, None, None, 0).unwrap();
+        let with = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, Some(portrait), None, None, None, &[], 0).unwrap();
         assert_eq!(plain.pixels, with.pixels);
     }
 
@@ -1167,7 +1306,7 @@ mod tests {
             edge: 0.0,
             image: None,
         };
-        let out = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, None, Some(background), None, 0).unwrap();
+        let out = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, None, Some(background), None, &[], 0).unwrap();
         let at = |image: &RgbaImage, x: usize, y: usize| image.pixels[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4].to_vec();
         assert_eq!(at(&out, 5, 10), at(&plain, 5, 10));
         assert_eq!(at(&out, 60, 10), vec![1, 2, 3, 255]);
@@ -1191,7 +1330,7 @@ mod tests {
             subject: None,
             shape: Some(&shape),
         };
-        let lit = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, None, None, Some(light), 0).unwrap();
+        let lit = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, None, None, Some(light), &[], 0).unwrap();
         let green = |image: &RgbaImage, x: usize, y: usize| image.pixels[(y * 64 + x) * 4 + 1];
         assert!(green(&lit, 6, 24) > green(&plain, 6, 24));
         assert_eq!(Shape::from_depth(&depth, 10, 10, 64, 48).unwrap_err(), EngineError::InvalidArgument);
@@ -1218,5 +1357,27 @@ mod tests {
         let again = Shape::from_normals(&normals).unwrap().normals().unwrap();
         assert_eq!(normals.width, again.width);
         assert!(normals.values.iter().zip(&again.values).all(|(a, b)| (a - b).abs() < 1e-5));
+    }
+
+    #[test]
+    fn layers_with_strokes_render() {
+        let source = Source::open(PNG).unwrap();
+        let plain = source.render(0.0, 0.0, 64.0, 48.0, 64, 48).unwrap();
+        let brighter = Adjustments { exposure: 1.0, ..Default::default() };
+        let points = [4.0, 24.0, 60.0, 24.0];
+        let strokes = [Stroke { points: &points, size: 8.0, hardness: 1.0, opacity: 1.0, erase: false }];
+        let layer = Layer {
+            content: LayerContent::Adjustment(&brighter),
+            blend: BlendMode::Normal,
+            opacity: 1.0,
+            mask_base: MaskBase::None,
+            mask_invert: false,
+            matte: None,
+            strokes: &strokes,
+        };
+        let out = source.render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, None, None, None, &[layer], 0).unwrap();
+        let green = |image: &RgbaImage, x: usize, y: usize| image.pixels[(y * 64 + x) * 4 + 1];
+        assert!(green(&out, 30, 24) > green(&plain, 30, 24));
+        assert_eq!(green(&out, 30, 5), green(&plain, 30, 5));
     }
 }

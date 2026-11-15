@@ -228,7 +228,7 @@ mod tests {
         let render = |history: &History| {
             let engine = history.current().to_engine();
             source
-                .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&engine), None, None, 0)
+                .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, None, Some(&engine), None, None, &[], 0)
                 .unwrap()
                 .pixels
         };

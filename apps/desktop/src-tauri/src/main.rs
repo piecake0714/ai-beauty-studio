@@ -126,10 +126,11 @@ const PREVIEW_MAX_DIMENSION: u32 = 512;
 
 impl SaveParts {
     fn preview(&self) -> Option<application_core::RgbaImage> {
-        let (w, h) = (self.inputs.source.width(), self.inputs.source.height());
+        let adjustments = self.history.current();
+        let (x, y, w, h) = adjustments.crop.rect(self.inputs.source.width(), self.inputs.source.height());
         let (pw, ph) = export::output_size(w, h, Some(PREVIEW_MAX_DIMENSION));
         self.inputs
-            .render(&self.history.current(), 0.0, 0.0, w as f64, h as f64, pw, ph, 0)
+            .render(&adjustments, x as f64, y as f64, w as f64, h as f64, pw, ph, 0)
             .ok()
     }
 
@@ -180,6 +181,9 @@ impl RenderInputs {
             .and_then(|s| s.as_deref());
         let background = self.matte.as_deref().and_then(|m| clamped.background(m, image));
         let light = clamped.light(self.matte.as_deref(), self.shape.as_deref());
+        let prepared = clamped.prepare_layers();
+        let images: Vec<Option<&Source>> = self.images.iter().map(|s| s.as_deref()).collect();
+        let layers = prepared.layers(self.matte.as_deref(), &images);
         self.source.render_adjusted(
             x,
             y,
@@ -194,6 +198,7 @@ impl RenderInputs {
             Some(&colour),
             background,
             light,
+            &layers,
             original_columns,
         )
     }
@@ -647,14 +652,14 @@ fn export_image(path: String, options: ExportOptions, state: State<'_, AppState>
     let protected_refs: Vec<&Path> = protected.iter().map(PathBuf::as_path).collect();
     export::check_target(&target, &protected_refs).map_err(|e| e.code().to_string())?;
     Ok(state.jobs.start(move |ctx| {
-        let (w, h) = (parts.inputs.source.width(), parts.inputs.source.height());
-        let (out_w, out_h) = export::output_size(w, h, options.long_side);
-        ctx.progress(0.02, "render");
-        // Rendered in strips so memory stays bounded for large photos.
+        // The kept (cropped) part of the photo, rendered in strips so
+        // memory stays bounded for large photos.
         let adjustments = parts.history.current();
+        let region = adjustments.crop.rect(parts.inputs.source.width(), parts.inputs.source.height());
+        let (out_w, out_h) = export::output_size(region.2, region.3, options.long_side);
+        ctx.progress(0.02, "render");
         let image = export::render_in_strips(
-            w,
-            h,
+            region,
             out_w,
             out_h,
             export::STRIP_ROWS,
