@@ -201,7 +201,7 @@ std::vector<uint8_t> grey_ramp() {
     return px;
 }
 
-std::vector<uint8_t> apply(const aibs_look& look, const std::vector<uint8_t>& in) {
+std::vector<uint8_t> run_look(const aibs_look& look, const std::vector<uint8_t>& in) {
     std::vector<uint8_t> out(in.size());
     CHECK(aibs_look_rgb8(&look, in.data(), out.data(), in.size() / 3) == AIBS_OK);
     return out;
@@ -216,10 +216,10 @@ void set_curve(aibs_look& look, int which, std::initializer_list<float> xy) {
 void test_empty_look_changes_nothing() {
     const auto ramp = grey_ramp();
     aibs_look look{};
-    CHECK(apply(look, ramp) == ramp);
+    CHECK(run_look(look, ramp) == ramp);
     // A straight curve and a LUT at amount 0 change nothing either.
     set_curve(look, AIBS_CURVE_MASTER, {0, 0, 1, 1});
-    CHECK(apply(look, ramp) == ramp);
+    CHECK(run_look(look, ramp) == ramp);
     CHECK(aibs_look_rgb8(nullptr, ramp.data(), nullptr, 1) == AIBS_ERR_INVALID_ARGUMENT);
 }
 
@@ -229,7 +229,7 @@ void test_curves() {
     // and never decreasing.
     aibs_look look{};
     set_curve(look, AIBS_CURVE_MASTER, {0, 0, 0.25f, 0.15f, 0.5f, 0.5f, 0.75f, 0.85f, 1, 1});
-    const auto out = apply(look, ramp);
+    const auto out = run_look(look, ramp);
     CHECK(out[3 * 64] < 64 - 15 && out[3 * 191] > 191 + 15);
     CHECK(std::abs(out[3 * 128] - 128) <= 2 && out[0] == 0 && out[3 * 255] == 255);
     bool rising = true;
@@ -238,12 +238,12 @@ void test_curves() {
     // A red-only curve lifts red and leaves green and blue.
     aibs_look red{};
     set_curve(red, AIBS_CURVE_RED, {0, 0.2f, 1, 1});
-    const auto lifted = apply(red, ramp);
+    const auto lifted = run_look(red, ramp);
     CHECK(lifted[3 * 100] > 100 + 20 && lifted[3 * 100 + 1] == 100 && lifted[3 * 100 + 2] == 100);
     // Points out of order or not numbers are skipped; one point is straight.
     aibs_look bad{};
     set_curve(bad, AIBS_CURVE_MASTER, {0.5f, 0.9f, 0.4f, 0.1f, NAN, 0.3f});
-    CHECK(apply(bad, ramp) == ramp);
+    CHECK(run_look(bad, ramp) == ramp);
 }
 
 void test_grading() {
@@ -255,7 +255,7 @@ void test_grading() {
     look.grade_saturation[AIBS_GRADE_SHADOWS] = 100;
     look.grade_hue[AIBS_GRADE_HIGHLIGHTS] = 30;
     look.grade_saturation[AIBS_GRADE_HIGHLIGHTS] = 100;
-    const auto out = apply(look, ramp);
+    const auto out = run_look(look, ramp);
     const uint8_t* dark = &out[3 * 40];
     const uint8_t* light = &out[3 * 215];
     CHECK(dark[2] > dark[0] + 10);
@@ -265,7 +265,7 @@ void test_grading() {
     // Midtone brightness raises the middle most.
     aibs_look mid{};
     mid.grade_luminance[AIBS_GRADE_MIDTONES] = 100;
-    const auto brighter = apply(mid, ramp);
+    const auto brighter = run_look(mid, ramp);
     CHECK(brighter[3 * 128] - 128 > brighter[3 * 20] - 20);
     CHECK(brighter[3 * 128] > 128 + 15);
 }
@@ -282,10 +282,10 @@ void test_lut() {
     look.lut = made;
     look.lut_amount = 100;
     const std::vector<uint8_t> px = {200, 100, 20};
-    const auto out = apply(look, px);
+    const auto out = run_look(look, px);
     CHECK(std::abs(out[0] - 20) <= 1 && std::abs(out[1] - 100) <= 1 && std::abs(out[2] - 200) <= 1);
     look.lut_amount = 50;
-    const auto half = apply(look, px);
+    const auto half = run_look(look, px);
     CHECK(std::abs(half[0] - 110) <= 1 && std::abs(half[2] - 110) <= 1);
     aibs_lut_free(made);
     aibs_lut_free(lut);
