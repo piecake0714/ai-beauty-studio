@@ -76,7 +76,10 @@ fn map_engine_error(error: EngineError) -> OpenError {
     match error {
         EngineError::DecodeFailed => OpenError::NotAnImage,
         EngineError::OutOfMemory => OpenError::OutOfMemory,
-        EngineError::InvalidArgument | EngineError::Internal => OpenError::Internal,
+        EngineError::InvalidArgument
+        | EngineError::Internal
+        | EngineError::ModelInvalid
+        | EngineError::InferenceFailed => OpenError::Internal,
     }
 }
 

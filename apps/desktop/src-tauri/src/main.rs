@@ -89,7 +89,10 @@ fn engine_error_code(error: EngineError) -> String {
     match error {
         EngineError::OutOfMemory => "out_of_memory",
         EngineError::InvalidArgument => "invalid_request",
-        EngineError::DecodeFailed | EngineError::Internal => "internal",
+        EngineError::DecodeFailed
+        | EngineError::Internal
+        | EngineError::ModelInvalid
+        | EngineError::InferenceFailed => "internal",
     }
     .to_string()
 }

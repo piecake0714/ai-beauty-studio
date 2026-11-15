@@ -20,6 +20,10 @@ const AIBS_OK: i32 = 0;
 const AIBS_ERR_INVALID_ARGUMENT: i32 = 1;
 const AIBS_ERR_DECODE_FAILED: i32 = 2;
 const AIBS_ERR_OUT_OF_MEMORY: i32 = 3;
+const AIBS_ERR_MODEL_INVALID: i32 = 10;
+const AIBS_ERR_INFERENCE_FAILED: i32 = 11;
+const AIBS_PROVIDER_CPU: i32 = 0;
+const AIBS_PROVIDER_DIRECTML: i32 = 1;
 
 extern "C" {
     fn aibs_engine_version() -> *const c_char;
@@ -44,6 +48,28 @@ extern "C" {
         original_columns: u32,
         out: *mut AibsImage,
     ) -> i32;
+    fn aibs_gpu_list(out: *mut GpuInfoRaw, capacity: u32) -> u32;
+    fn aibs_ai_runtime_version() -> *const c_char;
+    fn aibs_ai_open(
+        model: *const u8,
+        len: usize,
+        preferred: i32,
+        out: *mut *mut AiSessionRaw,
+        used_provider: *mut i32,
+        note: *mut c_char,
+        note_len: usize,
+    ) -> i32;
+    fn aibs_ai_run(
+        session: *mut AiSessionRaw,
+        input: *const f32,
+        shape: *const i64,
+        rank: usize,
+        output: *mut *mut f32,
+        out_shape: *mut i64,
+        out_rank: *mut usize,
+    ) -> i32;
+    fn aibs_ai_free(data: *mut f32);
+    fn aibs_ai_close(session: *mut AiSessionRaw);
     fn aibs_adjust_rgb8(adjustments: *const Adjustments, input: *const u8, output: *mut u8, pixel_count: usize) -> i32;
     fn aibs_source_free(source: *mut AibsSourceRaw);
 }
@@ -95,7 +121,170 @@ fn status_to_result(status: i32) -> Result<(), EngineError> {
         AIBS_ERR_INVALID_ARGUMENT => Err(EngineError::InvalidArgument),
         AIBS_ERR_DECODE_FAILED => Err(EngineError::DecodeFailed),
         AIBS_ERR_OUT_OF_MEMORY => Err(EngineError::OutOfMemory),
+        AIBS_ERR_MODEL_INVALID => Err(EngineError::ModelInvalid),
+        AIBS_ERR_INFERENCE_FAILED => Err(EngineError::InferenceFailed),
         _ => Err(EngineError::Internal),
+    }
+}
+
+#[repr(C)]
+struct GpuInfoRaw {
+    name: [c_char; 256],
+    vendor_id: u32,
+    is_software: u32,
+    dedicated_memory: u64,
+    shared_memory: u64,
+}
+
+/// A display adapter reported by the system.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GpuInfo {
+    pub name: String,
+    pub vendor_id: u32,
+    /// A software renderer, not a real GPU.
+    pub is_software: bool,
+    pub dedicated_memory: u64,
+    pub shared_memory: u64,
+}
+
+/// The system's display adapters, in the order the system prefers them.
+pub fn gpu_list() -> Vec<GpuInfo> {
+    // SAFETY: a null buffer with capacity 0 only returns the count.
+    let count = unsafe { aibs_gpu_list(std::ptr::null_mut(), 0) };
+    let mut raw: Vec<GpuInfoRaw> = (0..count)
+        .map(|_| GpuInfoRaw {
+            name: [0; 256],
+            vendor_id: 0,
+            is_software: 0,
+            dedicated_memory: 0,
+            shared_memory: 0,
+        })
+        .collect();
+    // SAFETY: `raw` has room for `count` entries.
+    let filled = unsafe { aibs_gpu_list(raw.as_mut_ptr(), count) }.min(count) as usize;
+    raw.truncate(filled);
+    raw.iter()
+        .map(|g| GpuInfo {
+            // SAFETY: the engine NUL-terminates the name within the array.
+            name: unsafe { CStr::from_ptr(g.name.as_ptr()) }.to_string_lossy().into_owned(),
+            vendor_id: g.vendor_id,
+            is_software: g.is_software != 0,
+            dedicated_memory: g.dedicated_memory,
+            shared_memory: g.shared_memory,
+        })
+        .collect()
+}
+
+/// Where a model runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provider {
+    Cpu,
+    DirectMl,
+}
+
+/// ONNX Runtime version linked into the engine.
+pub fn ai_runtime_version() -> String {
+    // SAFETY: the engine returns a pointer to a static NUL-terminated string.
+    unsafe { CStr::from_ptr(aibs_ai_runtime_version()) }.to_string_lossy().into_owned()
+}
+
+#[repr(C)]
+struct AiSessionRaw {
+    _private: [u8; 0],
+}
+
+/// A loaded model with one float input and one float output.
+pub struct AiSession {
+    raw: *mut AiSessionRaw,
+    provider: Provider,
+    /// Why DirectML is not in use, when it was wanted.
+    fallback_reason: Option<String>,
+}
+
+// SAFETY: the engine allows runs from several threads; callers that need
+// ordering add their own locking.
+unsafe impl Send for AiSession {}
+unsafe impl Sync for AiSession {}
+
+impl AiSession {
+    /// Load a model, preferring `preferred` and falling back to the CPU.
+    pub fn open(model: &[u8], preferred: Provider) -> Result<AiSession, (EngineError, String)> {
+        let mut raw: *mut AiSessionRaw = std::ptr::null_mut();
+        let mut used: i32 = AIBS_PROVIDER_CPU;
+        let mut note = [0 as c_char; 512];
+        let wanted = match preferred {
+            Provider::Cpu => AIBS_PROVIDER_CPU,
+            Provider::DirectMl => AIBS_PROVIDER_DIRECTML,
+        };
+        // SAFETY: all pointers are valid for the call; the note buffer's
+        // length is passed so the engine never writes past it.
+        let status = unsafe {
+            aibs_ai_open(model.as_ptr(), model.len(), wanted, &mut raw, &mut used, note.as_mut_ptr(), note.len())
+        };
+        // SAFETY: the engine always NUL-terminates the note.
+        let note = unsafe { CStr::from_ptr(note.as_ptr()) }.to_string_lossy().into_owned();
+        status_to_result(status).map_err(|e| (e, note.clone()))?;
+        let provider = if used == AIBS_PROVIDER_DIRECTML { Provider::DirectMl } else { Provider::Cpu };
+        Ok(AiSession {
+            raw,
+            provider,
+            fallback_reason: if preferred == Provider::DirectMl && provider == Provider::Cpu {
+                Some(note)
+            } else {
+                None
+            },
+        })
+    }
+
+    pub fn provider(&self) -> Provider {
+        self.provider
+    }
+
+    pub fn fallback_reason(&self) -> Option<&str> {
+        self.fallback_reason.as_deref()
+    }
+
+    /// Run the model. Returns the output values and their shape.
+    pub fn run(&self, input: &[f32], shape: &[i64]) -> Result<(Vec<f32>, Vec<i64>), EngineError> {
+        let expected: i64 = shape.iter().product();
+        if shape.is_empty() || shape.len() > 8 || expected <= 0 || expected as usize != input.len() {
+            return Err(EngineError::InvalidArgument);
+        }
+        let mut output: *mut f32 = std::ptr::null_mut();
+        let mut out_shape = [0i64; 8];
+        let mut out_rank = 0usize;
+        // SAFETY: input and shape are valid for their lengths; outputs are writable.
+        status_to_result(unsafe {
+            aibs_ai_run(
+                self.raw,
+                input.as_ptr(),
+                shape.as_ptr(),
+                shape.len(),
+                &mut output,
+                out_shape.as_mut_ptr(),
+                &mut out_rank,
+            )
+        })?;
+        let dims = out_shape[..out_rank].to_vec();
+        let count = dims.iter().product::<i64>().max(0) as usize;
+        // SAFETY: on success the engine returns `count` floats, freed below.
+        let values = unsafe { std::slice::from_raw_parts(output, count) }.to_vec();
+        // SAFETY: `output` came from the engine and is freed once.
+        unsafe { aibs_ai_free(output) };
+        Ok((values, dims))
+    }
+}
+
+impl Drop for AiSession {
+    fn drop(&mut self) {
+        // SAFETY: `raw` came from `aibs_ai_open` and is closed once.
+        unsafe { aibs_ai_close(self.raw) };
+    }
+}
+
+impl fmt::Debug for AiSession {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AiSession").field("provider", &self.provider).finish()
     }
 }
 
@@ -244,6 +433,8 @@ pub enum EngineError {
     DecodeFailed,
     OutOfMemory,
     Internal,
+    ModelInvalid,
+    InferenceFailed,
 }
 
 impl fmt::Display for EngineError {
@@ -253,6 +444,8 @@ impl fmt::Display for EngineError {
             EngineError::DecodeFailed => "the data is not a readable image",
             EngineError::OutOfMemory => "not enough memory to decode the image",
             EngineError::Internal => "internal engine error",
+            EngineError::ModelInvalid => "the model could not be loaded",
+            EngineError::InferenceFailed => "the model could not be run on this input",
         };
         f.write_str(text)
     }
@@ -385,6 +578,46 @@ mod tests {
             }
             assert_eq!(&split.pixels[p..p + 3], &expected, "column {col}");
         }
+    }
+
+    const TEST_MODEL: &[u8] = include_bytes!("../../../models/files/test-luma-v1.onnx");
+
+    #[test]
+    fn reports_gpus_and_runtime_version() {
+        let gpus = gpu_list();
+        if cfg!(windows) {
+            assert!(!gpus.is_empty());
+        }
+        assert!(gpus.iter().all(|g| !g.name.is_empty()));
+        assert!(ai_runtime_version().starts_with("1."));
+    }
+
+    #[test]
+    fn runs_the_test_model_on_cpu_and_preferred_gpu() {
+        for preferred in [Provider::Cpu, Provider::DirectMl] {
+            let session = AiSession::open(TEST_MODEL, preferred).unwrap();
+            if preferred == Provider::Cpu {
+                assert_eq!(session.provider(), Provider::Cpu);
+                assert!(session.fallback_reason().is_none());
+            }
+            // 2 x 2 image: pure red, green, blue and white.
+            let input = [1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0];
+            let (values, shape) = session.run(&input, &[1, 3, 2, 2]).unwrap();
+            assert_eq!(shape, [1, 1, 2, 2]);
+            for (got, want) in values.iter().zip([0.2126f32, 0.7152, 0.0722, 1.0]) {
+                assert!((got - want).abs() < 1e-3, "{got} vs {want}");
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_broken_models_and_mismatched_input() {
+        let (error, note) = AiSession::open(b"not a model", Provider::Cpu).unwrap_err();
+        assert_eq!(error, EngineError::ModelInvalid);
+        assert!(!note.is_empty());
+        let session = AiSession::open(TEST_MODEL, Provider::Cpu).unwrap();
+        assert_eq!(session.run(&[0.5; 3], &[1, 3, 2, 2]), Err(EngineError::InvalidArgument));
+        assert_eq!(session.run(&[0.5; 4], &[1, 1, 2, 2]), Err(EngineError::InferenceFailed));
     }
 
     #[test]

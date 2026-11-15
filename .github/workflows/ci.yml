@@ -67,7 +67,9 @@ jobs:
               https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime.DirectML/1.24.4 &&
             curl -sSfL -o build/packages/dml.nupkg \
               https://www.nuget.org/api/v2/package/Microsoft.AI.DirectML/1.15.4 &&
-            sha256sum build/packages/*.nupkg &&
+            echo "57e9f11b73437bef7a309496135d4c1f96b1a8e9ddba60013fa27bfc1d788681 *build/packages/ort.nupkg" > build/packages/SHA256SUMS &&
+            echo "4e7cb7ddce8cf837a7a75dc029209b520ca0101470fcdf275c1f49736a3615b9 *build/packages/dml.nupkg" >> build/packages/SHA256SUMS &&
+            sha256sum -c build/packages/SHA256SUMS &&
             7z x -y -obuild/packages/ort build/packages/ort.nupkg > /dev/null &&
             7z x -y -obuild/packages/dml build/packages/dml.nupkg > /dev/null &&
             ls build/packages/ort/runtimes/win-x64/native build/packages/dml/bin/x64-win &&

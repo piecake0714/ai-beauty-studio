@@ -1,5 +1,10 @@
 #include "aibs/engine.h"
 
+// dml_provider_factory.h pulls in windows.h; keep its min/max macros out.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -149,8 +154,8 @@ int32_t aibs_ai_run(aibs_ai_session* session, const float* input, const int64_t*
             return AIBS_ERR_OUT_OF_MEMORY;
         }
         std::memcpy(buffer, results[0].GetTensorData<float>(), elements * sizeof(float));
-        for (size_t i = 0; i < dims.size(); ++i) {
-            out_shape[i] = dims[i];
+        for (size_t d = 0; d < dims.size(); ++d) {
+            out_shape[d] = dims[d];
         }
         *out_rank = dims.size();
         *output = buffer;
