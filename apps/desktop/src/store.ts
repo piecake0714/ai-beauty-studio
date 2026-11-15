@@ -27,6 +27,7 @@ import {
   type ExportOptions,
   type Layer,
   type LutEntry,
+  type Stroke,
   type FaceStatus,
   type FacesReport,
   type FileInfo,
@@ -49,7 +50,12 @@ import {
 export type View = "home" | "editor";
 
 /** What a pointer drag on the picture does. */
-export type Tool = "none" | "brush" | "eraser" | "crop" | "heal";
+export type Tool = "none" | "brush" | "eraser" | "crop" | "heal" | "remove";
+
+/** An AI edit running or failed: object removal or old-photo repair. */
+export type AiTask =
+  | { kind: "remove" | "repair"; state: "running"; jobId: number; fraction: number; cancelling: boolean }
+  | { kind: "remove" | "repair"; state: "failed"; code: string };
 
 /** Brush settings (not part of the document). */
 export interface BrushSettings {
@@ -185,6 +191,9 @@ export interface AppState {
   healSize: number;
   /** LUT presets and imported LUTs (loaded at startup). */
   luts: LutEntry[];
+  /** What is painted for object removal (not part of the document). */
+  removeStrokes: Stroke[];
+  aiTask: AiTask | null;
 
   init(): Promise<void>;
   /** Open an image. With `discard`, asks first when adjustments would be lost. */
@@ -274,6 +283,13 @@ export interface AppState {
   extendStroke(x: number, y: number): void;
   endStroke(): Promise<void>;
   setHealSize(size: number): void;
+  /** Forget what is painted for removal. */
+  clearRemoveStrokes(): void;
+  /** Remove what is painted (AI); on success one undoable step. */
+  startRemoval(): Promise<void>;
+  /** Repair an old photo (AI), strength 0–100; on success one undoable step. */
+  startRepair(strength: number): Promise<void>;
+  cancelAiTask(): Promise<void>;
   /** Read the LUT list from the core. */
   loadLuts(): Promise<void>;
   /** Choose a LUT (one undoable step); "" for none. */
@@ -719,6 +735,12 @@ export function createAppStore(api: Api) {
 
       beginStroke(x, y) {
         const { document, selectedLayer, tool, brush, live } = get();
+        if (document && tool === "remove") {
+          const size = brush.size * Math.max(document.size.width, document.size.height);
+          const stroke = { points: [x, y], size, hardness: 100, opacity: 100, erase: false };
+          set({ painting: true, removeStrokes: [...get().removeStrokes, stroke].slice(-MAX_STROKES) });
+          return;
+        }
         if (!document || selectedLayer === null || (tool !== "brush" && tool !== "eraser")) return;
         const layer = live.layers.find((l) => l.id === selectedLayer);
         if (!layer || layer.mask.strokes.length >= MAX_STROKES) return;
@@ -731,7 +753,17 @@ export function createAppStore(api: Api) {
       },
 
       extendStroke(x, y) {
-        const { painting, selectedLayer, live } = get();
+        const { painting, selectedLayer, live, tool } = get();
+        if (painting && tool === "remove") {
+          const strokes = [...get().removeStrokes];
+          const last = strokes[strokes.length - 1];
+          if (!last || last.points.length >= MAX_STROKE_VALUES) return;
+          const n = last.points.length;
+          if (Math.hypot(x - last.points[n - 2], y - last.points[n - 1]) < last.size * STROKE_SPACING) return;
+          strokes[strokes.length - 1] = { ...last, points: [...last.points, x, y] };
+          set({ removeStrokes: strokes });
+          return;
+        }
         if (!painting || selectedLayer === null) return;
         set({
           live: withLayer(live, selectedLayer, (l) => {
@@ -751,7 +783,45 @@ export function createAppStore(api: Api) {
       async endStroke() {
         if (!get().painting) return;
         set({ painting: false });
+        if (get().tool === "remove") return;
         await get().commitLive();
+      },
+
+      removeStrokes: [],
+      aiTask: null,
+
+      clearRemoveStrokes: () => set({ removeStrokes: [] }),
+
+      async startRemoval() {
+        const { document, removeStrokes, aiTask } = get();
+        if (!document || removeStrokes.length === 0 || aiTask?.state === "running") return;
+        try {
+          const jobId = await api.removeObject(removeStrokes);
+          set({ aiTask: { kind: "remove", state: "running", jobId, fraction: 0, cancelling: false } });
+        } catch (reason) {
+          set({ aiTask: { kind: "remove", state: "failed", code: errorCode(reason) } });
+        }
+      },
+
+      async startRepair(strength) {
+        const { document, aiTask } = get();
+        if (!document || aiTask?.state === "running") return;
+        try {
+          const jobId = await api.repairOldPhoto(strength);
+          set({ aiTask: { kind: "repair", state: "running", jobId, fraction: 0, cancelling: false } });
+        } catch (reason) {
+          set({ aiTask: { kind: "repair", state: "failed", code: errorCode(reason) } });
+        }
+      },
+
+      async cancelAiTask() {
+        const task = get().aiTask;
+        if (task?.state !== "running") {
+          set({ aiTask: null });
+          return;
+        }
+        set({ aiTask: { ...task, cancelling: true } });
+        await api.cancelJob(task.jobId).catch(() => false);
       },
 
       healSize: 0.015,
@@ -940,6 +1010,38 @@ export function createAppStore(api: Api) {
       },
 
       receiveJobUpdate(update) {
+        const task = get().aiTask;
+        if (task?.state === "running" && task.jobId === update.id) {
+          switch (update.state) {
+            case "progress":
+              set({ aiTask: { ...task, fraction: Math.max(task.fraction, update.fraction) } });
+              break;
+            case "finished": {
+              set({ aiTask: null });
+              const result = update.result as { patchId?: number; adjustments?: Adjustments } | null;
+              let next: Adjustments | null = null;
+              if (task.kind === "remove" && typeof result?.patchId === "number") {
+                next = { ...get().live, removals: [...get().live.removals, result.patchId] };
+                set({ removeStrokes: [] });
+              } else if (task.kind === "repair" && result?.adjustments) {
+                next = result.adjustments;
+              }
+              if (next) {
+                const adjustments = next;
+                set({ live: adjustments });
+                void adoptEdit(() => api.commitAdjustments(adjustments));
+              }
+              break;
+            }
+            case "failed":
+              set({ aiTask: { kind: task.kind, state: "failed", code: update.code } });
+              break;
+            case "cancelled":
+              set({ aiTask: null });
+              break;
+          }
+          return;
+        }
         const exporting = get().exporting;
         if (exporting?.state === "running" && exporting.jobId === update.id) {
           switch (update.state) {

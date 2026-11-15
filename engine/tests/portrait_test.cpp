@@ -534,6 +534,119 @@ void test_healing_spots() {
     }
 }
 
+// ---- 1.5: patches and noise reduction ------------------------------------
+
+void test_patches() {
+    cv::Mat bgr(80, 100, CV_8UC3, cv::Scalar(90, 90, 90));
+    Source source;
+    CHECK(open_mat(bgr, source));
+    // A 10 x 10 red patch, opaque, stretched over the 20 x 20 source
+    // rectangle at (30, 20); its outer ring half transparent.
+    std::vector<uint8_t> rgba(10 * 10 * 4);
+    for (int j = 0; j < 10; ++j)
+        for (int i = 0; i < 10; ++i) {
+            uint8_t* p = &rgba[(j * 10 + i) * 4];
+            p[0] = 220;
+            p[1] = 20;
+            p[2] = 30;
+            p[3] = (i == 0 || j == 0 || i == 9 || j == 9) ? 128 : 255;
+        }
+    aibs_patch* patch = nullptr;
+    CHECK(aibs_patch_create(rgba.data(), 10, 10, 30, 20, 20, 20, &patch) == AIBS_OK);
+    CHECK(aibs_patch_create(nullptr, 10, 10, 30, 20, 20, 20, &patch) == AIBS_ERR_INVALID_ARGUMENT && patch == nullptr);
+    CHECK(aibs_patch_create(rgba.data(), 10, 10, 30, 20, 20, 20, &patch) == AIBS_OK);
+    const aibs_patch* list[] = {patch};
+    aibs_portrait p{nullptr, 0, 0.0f};
+    p.patches = list;
+    p.patch_count = 1;
+    Image original, patched;
+    CHECK(render_full(source, bgr, nullptr, original));
+    CHECK(render_full(source, bgr, &p, patched));
+    if (original.img.data && patched.img.data) {
+        const uint8_t* c = patched.px(40, 30);
+        CHECK(c[0] == 220 && c[1] == 20 && c[2] == 30);
+        CHECK(same_outside(original, patched, {cv::Rect(30, 20, 20, 20)}));
+        // Half-transparent edge: a mix of grey and red, never darker.
+        const uint8_t* edge = patched.px(30, 30);
+        CHECK(edge[0] > 100 && edge[0] < 210 && edge[1] < 90);
+    }
+    // Zoomed in 3x on part of it: the same colours where it is opaque.
+    Image zoomed;
+    CHECK(aibs_source_render(source.ptr, 35, 25, 10, 10, 30, 30, &p, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0,
+                             &zoomed.img) == AIBS_OK);
+    if (zoomed.img.data) CHECK(zoomed.px(15, 15)[0] == 220);
+    // The split view leaves the left side original.
+    Image split;
+    CHECK(aibs_source_render(source.ptr, 0, 0, 100, 80, 100, 80, &p, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 50,
+                             &split.img) == AIBS_OK);
+    if (split.img.data) CHECK(split.px(40, 30)[0] == 90);
+    aibs_patch_free(patch);
+    aibs_patch_free(nullptr);
+}
+
+double region_stddev(const Image& image, int x0, int y0, int x1, int y1, int channel) {
+    return stddev_of(image, x0, y0, x1, y1, channel);
+}
+
+void test_noise_reduction() {
+    // Left dark, right light, with brightness grain and coloured blotches.
+    cv::Mat bgr(120, 160, CV_8UC3);
+    for (int y = 0; y < bgr.rows; ++y)
+        for (int x = 0; x < bgr.cols; ++x) {
+            const double base = x < 80 ? 60 : 190;
+            const double grain = 18 * noise(x, y, 7);
+            const double tint = 14 * noise(x / 2, y / 2, 8);
+            bgr.at<cv::Vec3b>(y, x) = cv::Vec3b(cv::saturate_cast<uint8_t>(base + grain - tint),
+                                               cv::saturate_cast<uint8_t>(base + grain),
+                                               cv::saturate_cast<uint8_t>(base + grain + tint));
+        }
+    Source source;
+    CHECK(open_mat(bgr, source));
+    Image original, clean;
+    CHECK(render_full(source, bgr, nullptr, original));
+    aibs_portrait p{nullptr, 0, 0.0f};
+    p.noise_luminance = 100;
+    p.noise_color = 100;
+    CHECK(render_full(source, bgr, &p, clean));
+    if (!original.img.data || !clean.img.data) return;
+    const double green_before = region_stddev(original, 10, 10, 60, 110, 1);
+    const double green_after = region_stddev(clean, 10, 10, 60, 110, 1);
+    // Colour noise: red minus blue varies less.
+    const auto colour_spread = [](const Image& im) {
+        double sum = 0, sq = 0, n = 0;
+        for (int y = 10; y < 110; ++y)
+            for (int x = 100; x < 150; ++x) {
+                const double d = static_cast<double>(im.px(x, y)[0]) - im.px(x, y)[2];
+                sum += d;
+                sq += d * d;
+                n += 1;
+            }
+        return std::sqrt(std::max(0.0, sq / n - (sum / n) * (sum / n)));
+    };
+    const double colour_before = colour_spread(original), colour_after = colour_spread(clean);
+    std::printf("info: noise grain %.1f -> %.1f, colour %.1f -> %.1f\n", green_before, green_after, colour_before,
+                colour_after);
+    CHECK(green_after < 0.6 * green_before);
+    CHECK(colour_after < 0.6 * colour_before);
+    // The edge stays sharp: two pixels either side still far apart.
+    double left = 0, right = 0;
+    for (int y = 10; y < 110; ++y) {
+        left += clean.px(77, y)[1];
+        right += clean.px(82, y)[1];
+    }
+    CHECK((right - left) / 100 > 100);
+    // A part rendered on its own matches the whole render.
+    Image part;
+    CHECK(aibs_source_render(source.ptr, 60, 30, 50, 40, 50, 40, &p, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0,
+                             &part.img) == AIBS_OK);
+    if (part.img.data) {
+        bool same = true;
+        for (int y = 0; y < 40; ++y)
+            for (int x = 0; x < 50; ++x) same = same && std::memcmp(part.px(x, y), clean.px(60 + x, 30 + y), 4) == 0;
+        CHECK(same);
+    }
+}
+
 }  // namespace
 
 void run_portrait_tests() {
@@ -544,4 +657,6 @@ void run_portrait_tests() {
     test_auto_adjust();
     test_face_tools();
     test_healing_spots();
+    test_patches();
+    test_noise_reduction();
 }

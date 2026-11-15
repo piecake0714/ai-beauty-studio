@@ -6,6 +6,7 @@
 #include "../../light-engine/src/light.h"
 #include "../../portrait-engine/src/portrait.h"
 #include "decode_internal.h"
+#include "patch_internal.h"
 #include "source_internal.h"
 
 #include <algorithm>
@@ -125,7 +126,9 @@ int32_t aibs_source_render(const aibs_source* source,
         const bool composite = original_columns < out_width && aibs::background_active(background);
         const bool editing = original_columns < out_width;
         const int pad = std::max(composite ? aibs::background_margin(*background, full.cols, full.rows, scale_x, scale_y) : 0,
-                                 editing ? aibs::spot_margin(portrait, scale_x, scale_y) : 0);
+                                 editing ? std::max(aibs::spot_margin(portrait, scale_x, scale_y),
+                                                    aibs::noise_margin(portrait, scale_x, scale_y))
+                                         : 0);
         const double px = x - pad / scale_x;
         const double py = y - pad / scale_y;
         const int cols = static_cast<int>(out_width) + 2 * pad;
@@ -141,7 +144,9 @@ int32_t aibs_source_render(const aibs_source* source,
         // Retouch skin, adjust, light, then composite the background; all only
         // right of the before/after split.
         if (portrait != nullptr && editing) {
+            aibs::apply_patches(padded, first, px, py, scale_x, scale_y, portrait->patches, portrait->patch_count);
             aibs::heal_spots(padded, first, px, py, scale_x, scale_y, full.cols, full.rows, *portrait);
+            aibs::reduce_noise(padded, first, scale_x, scale_y, *portrait);
             aibs::retouch_faces(padded, first, px, py, scale_x, scale_y, *portrait);
             aibs::retouch_features(padded, first, px, py, scale_x, scale_y, *portrait);
         }

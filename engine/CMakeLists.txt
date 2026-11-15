@@ -39,6 +39,7 @@ add_library(aibs_engine SHARED
     image-engine/src/decode.cpp
     image-engine/src/source.cpp
     image-engine/src/raw.cpp
+    image-engine/src/patch.cpp
     color-engine/src/adjust.cpp
     color-engine/src/look.cpp
     gpu-engine/src/gpu.cpp

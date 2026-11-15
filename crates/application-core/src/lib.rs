@@ -10,6 +10,7 @@ pub mod document;
 pub mod export;
 pub mod files;
 pub mod info;
+pub mod inpaint;
 pub mod jobs;
 pub mod looks;
 pub mod models;
@@ -17,6 +18,7 @@ pub mod portrait;
 pub mod project;
 pub mod recovery;
 pub mod settings;
+pub mod upscale;
 
 use std::fmt;
 use std::fs;
@@ -25,7 +27,7 @@ use std::path::Path;
 
 pub use engine_sys::{
     encode, AiSession, Background, BackgroundMode, EngineError, Face, ImageFormat as EncodeFormat, Light, LightKind, Matte,
-    Plane, Portrait, Provider, RgbaImage, Shape, Source,
+    Patch, Plane, Portrait, Provider, RgbaImage, Shape, Source,
 };
 
 /// Why an image could not be opened. `code()` is the stable identifier the
@@ -333,6 +335,8 @@ mod tests {
             include_str!("background.rs"),
             include_str!("jobs.rs"),
             include_str!("looks.rs"),
+            include_str!("inpaint.rs"),
+            include_str!("upscale.rs"),
             include_str!("portrait.rs"),
         ];
         for code in sources.iter().flat_map(|text| quoted_codes(text)) {

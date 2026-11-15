@@ -91,8 +91,11 @@ export function ImageCanvas() {
   const healSize = useApp((s) => s.healSize);
   const addSpot = useApp((s) => s.addSpot);
   const canPaint = useApp(
-    (s) => (s.tool === "brush" || s.tool === "eraser") && s.live.layers.some((l) => l.id === s.selectedLayer),
+    (s) =>
+      s.tool === "remove" ||
+      ((s.tool === "brush" || s.tool === "eraser") && s.live.layers.some((l) => l.id === s.selectedLayer)),
   );
+  const removeStrokes = useApp((s) => s.removeStrokes);
   const beginStroke = useApp((s) => s.beginStroke);
   const extendStroke = useApp((s) => s.extendStroke);
   const endStroke = useApp((s) => s.endStroke);
@@ -125,8 +128,13 @@ export function ImageCanvas() {
   const draft = committed !== null && !sameAdjustments(renderLive, { ...committed, crop: FULL_CROP });
   const look = lookKey(renderLive, columns, draft, separated) + (shaped ? "|shaped" : "");
   // Latest values for callbacks that outlive this render.
-  const latestRef = useRef({ document, camera, viewport, live, columns, look, draft, bounds });
-  latestRef.current = { document, camera, viewport, live, columns, look, draft, bounds };
+  const latestRef = useRef({ document, camera, viewport, live, columns, look, draft, bounds, removeStrokes });
+  latestRef.current = { document, camera, viewport, live, columns, look, draft, bounds, removeStrokes };
+  // Redraw when what is painted for removal changes.
+  useEffect(() => {
+    requestAnimationFrame(draw);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [removeStrokes]);
 
   // Track the canvas size in device pixels.
   useEffect(() => {
@@ -172,6 +180,36 @@ export function ImageCanvas() {
     } finally {
       context.restore();
     }
+    drawRemoveStrokes(context, viewport);
+  }
+
+  /** What is painted for object removal, as a translucent red overlay. */
+  function drawRemoveStrokes(context: CanvasRenderingContext2D, viewport: Size) {
+    const { camera, removeStrokes: strokes } = latestRef.current;
+    if (!camera || strokes.length === 0) return;
+    context.save();
+    context.strokeStyle = "rgba(255, 64, 64, 0.5)";
+    context.fillStyle = "rgba(255, 64, 64, 0.5)";
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    for (const stroke of strokes) {
+      const width = Math.max(1, stroke.size * camera.zoom);
+      const points: { x: number; y: number }[] = [];
+      for (let i = 0; i + 1 < stroke.points.length; i += 2) {
+        points.push(toViewport(camera, viewport, { x: stroke.points[i], y: stroke.points[i + 1] }));
+      }
+      if (points.length === 1) {
+        context.beginPath();
+        context.arc(points[0].x, points[0].y, width / 2, 0, Math.PI * 2);
+        context.fill();
+        continue;
+      }
+      context.lineWidth = width;
+      context.beginPath();
+      points.forEach((p, i) => (i === 0 ? context.moveTo(p.x, p.y) : context.lineTo(p.x, p.y)));
+      context.stroke();
+    }
+    context.restore();
   }
 
   /** Draw the image, clipped to the shown part (the crop). */

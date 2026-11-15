@@ -11,6 +11,7 @@ import type {
   FacesReport,
   FileInfo,
   LutEntry,
+  Stroke,
   ModelOverview,
   LanguagePreference,
   RecoveryInfo,
@@ -77,6 +78,10 @@ export interface Api {
   startShapeEstimation(): Promise<number>;
   /** Open an image as a replacement background; resolves to its number. */
   addBackgroundImage(path: string): Promise<number>;
+  /** Remove what the strokes paint over (AI); returns the job id. */
+  removeObject(strokes: Stroke[]): Promise<number>;
+  /** Repair an old photo (AI), strength 0–100; returns the job id. */
+  repairOldPhoto(strength: number): Promise<number>;
   /** LUT presets and the user's imported LUTs. */
   listLuts(): Promise<LutEntry[]>;
   /** Check a .cube file and add it to the LUT library. */
@@ -205,6 +210,8 @@ export const tauriApi: Api = {
   startShapeEstimation: () => invoke("start_shape_estimation"),
   addBackgroundImage: (path) => invoke("add_background_image", { path }),
   listLuts: () => invoke("list_luts"),
+  removeObject: (strokes) => invoke("remove_object", { strokes }),
+  repairOldPhoto: (strength) => invoke("repair_old_photo", { strength }),
   importLut: (path) => invoke("import_lut", { path }),
   async pickLut(filterName) {
     const path = await open({ multiple: false, directory: false, filters: [{ name: filterName, extensions: ["cube"] }] });

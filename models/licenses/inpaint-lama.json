@@ -1,0 +1,13 @@
+{
+  "model": "inpaint-lama",
+  "version": "carve-lama-fp32",
+  "source": "LaMa (Resolution-robust Large Mask Inpainting with Fourier Convolutions, Suvorov et al., WACV 2022; https://github.com/advimman/lama), big-lama weights exported to ONNX by Carve at https://huggingface.co/Carve/LaMa-ONNX (model card license: apache-2.0)",
+  "license": "Apache-2.0",
+  "licenseText": "licenses/inpaint-lama.LICENSE.txt (upstream advimman/lama LICENSE, downloaded with the model by scripts/fetch_models.py)",
+  "commercialUse": true,
+  "trainingData": "Places2/Places365; per the OpenCV Zoo LaMa entry the Places365 image-download terms are limited to non-commercial research and education. This project is non-commercial (decision D6); re-check before any commercial use.",
+  "notes": "Fills painted areas (object removal) and found dust and scratches (old-photo repair). Fixed 512x512 input.",
+  "checkedOn": "2026-11-16",
+  "checkedBy": "Project maintainer",
+  "approved": true
+}

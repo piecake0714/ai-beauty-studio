@@ -145,6 +145,9 @@ pub struct LutChoice {
     pub amount: f32,
 }
 
+/// Most object removals in effect at once.
+pub const MAX_REMOVALS: usize = engine_sys::MAX_PATCHES;
+
 /// Most healing spots a document may have.
 pub const MAX_SPOTS: usize = engine_sys::MAX_SPOTS;
 /// Largest healing spot radius, in source pixels.
@@ -492,6 +495,12 @@ pub struct Adjustments {
     pub teeth_whitening: f32,
     /// Healing spots, in source pixels (at most [`MAX_SPOTS`]).
     pub spots: Vec<HealSpot>,
+    /// Noise reduction, 0 to 100: brightness grain and colour blotches.
+    pub noise_luminance: f32,
+    pub noise_color: f32,
+    /// Object removals in effect: ids of the document's patches, applied in
+    /// order (at most [`MAX_REMOVALS`]).
+    pub removals: Vec<u32>,
     pub background_mode: BackgroundSetting,
     /// R, G, B for [`BackgroundSetting::Color`].
     pub background_color: [u8; 3],
@@ -561,6 +570,9 @@ impl Adjustments {
             eye_enhance: fix(self.eye_enhance, 100.0).max(0.0),
             teeth_whitening: fix(self.teeth_whitening, 100.0).max(0.0),
             spots: self.spots.iter().filter_map(HealSpot::clamped).take(MAX_SPOTS).collect(),
+            noise_luminance: fix(self.noise_luminance, 100.0).max(0.0),
+            noise_color: fix(self.noise_color, 100.0).max(0.0),
+            removals: self.removals.iter().copied().take(MAX_REMOVALS).collect(),
             background_mode: self.background_mode,
             background_color: self.background_color,
             background_blur: fix(self.background_blur, 100.0).max(0.0),
@@ -636,8 +648,14 @@ impl Adjustments {
         self.spots.iter().map(|s| s.to_engine()).collect()
     }
 
-    /// Portrait retouching for the engine, from clamped values.
-    pub fn portrait<'a>(&self, faces: &'a [engine_sys::Face], spots: &'a [engine_sys::Spot]) -> engine_sys::Portrait<'a> {
+    /// Portrait retouching for the engine, from clamped values; `patches`
+    /// are the document's patches listed in `removals`, in that order.
+    pub fn portrait<'a>(
+        &self,
+        faces: &'a [engine_sys::Face],
+        spots: &'a [engine_sys::Spot],
+        patches: &'a [&'a engine_sys::Patch],
+    ) -> engine_sys::Portrait<'a> {
         engine_sys::Portrait {
             faces,
             smoothing: self.skin_smoothing,
@@ -646,6 +664,9 @@ impl Adjustments {
             eyes: self.eye_enhance,
             teeth: self.teeth_whitening,
             spots,
+            noise_luminance: self.noise_luminance,
+            noise_color: self.noise_color,
+            patches,
         }
     }
 
@@ -1042,11 +1063,17 @@ mod tests {
         let many = Adjustments { spots: vec![HealSpot { x: 1.0, y: 1.0, radius: 2.0 }; MAX_SPOTS + 7], ..Default::default() };
         assert_eq!(many.clamped().spots.len(), MAX_SPOTS);
         let spots = a.engine_spots();
-        let portrait = a.portrait(&[], &spots);
+        let portrait = a.portrait(&[], &spots, &[]);
         assert_eq!((portrait.blemishes, portrait.teeth, portrait.spots.len()), (100.0, 55.0, 2));
         // Older saved data without these fields loads with them off.
         let old: Adjustments = serde_json::from_str(r#"{"skinSmoothing":30}"#).unwrap();
         assert!(old.spots.is_empty() && old.blemish_removal == 0.0 && old.background_detail == 0.0);
+        let noisy = Adjustments { noise_luminance: 140.0, noise_color: -3.0, removals: (0..300).collect(), ..Default::default() }.clamped();
+        assert_eq!((noisy.noise_luminance, noisy.noise_color, noisy.removals.len()), (100.0, 0.0, MAX_REMOVALS));
+        let json = serde_json::to_value(&noisy).unwrap();
+        for key in ["noiseLuminance", "noiseColor", "removals"] {
+            assert!(json.get(key).is_some(), "missing {key}");
+        }
         let json = serde_json::to_value(&a).unwrap();
         for key in ["blemishRemoval", "darkCircles", "eyeEnhance", "teethWhitening", "backgroundDetail", "spots"] {
             assert!(json.get(key).is_some(), "missing {key}");

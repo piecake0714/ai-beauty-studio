@@ -23,6 +23,7 @@
     "not_a_project",
     "not_an_image",
     "not_found",
+    "nothing_to_remove",
     "notices_missing",
     "original_changed",
     "original_missing",
@@ -32,6 +33,7 @@
     "project_newer_version",
     "read_failed",
     "settings_save_failed",
-    "superseded"
+    "superseded",
+    "upscale_too_large"
   ]
 }

@@ -33,6 +33,8 @@ vcpkg 的 SPDX 檔對這 11 個套件的授權欄位都是 `NOASSERTION`，因�
 | YuNet 臉部偵測模型（OpenCV Zoo，face_detection_yunet_2023mar.onnx） | 2023mar，SHA-256 `8f2383e4…2552fa4` | MIT | 不存入 Git，由 `scripts/fetch_models.py` 從 Hugging Face 的 OpenCV Zoo 鏡像下載並驗證雜湊；授權紀錄 `models/licenses/face-yunet.json`，上游 LICENSE 全文收入聲明檔 |
 | BiRefNet lite 主體分離模型（BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx） | 官方 GitHub release v1，SHA-256 `56000243…d0f03333` | MIT | 不存入 Git，由 `scripts/fetch_models.py` 從 https://github.com/ZhengPeng7/BiRefNet/releases/tag/v1 下載並驗證雜湊；授權紀錄 `models/licenses/background-birefnet-lite.json`，上游 LICENSE 全文收入聲明檔。訓練資料集條款尚未查核 |
 | Depth Anything V2 Small 深度模型（onnx-community 轉檔，onnx/model.onnx） | SHA-256 `afb6a5c2…1df10c`，99,060,839 位元組 | Apache-2.0（只有 Small 版；Base／Large／Giant 為 CC-BY-NC-4.0，未使用） | 不存入 Git，由 `scripts/fetch_models.py` 下載並驗證雜湊；上游 LICENSE（Apache License 2.0 全文）收入聲明檔；授權紀錄 `models/licenses/depth-anything-v2-small.json`。訓練資料集條款尚未查核 |
+| LaMa 修補模型（big-lama，Carve 轉成 ONNX 的 lama_fp32.onnx，1.5） | SHA-256 `1faef530…eb68d6` | Apache-2.0（模型卡與上游 advimman/lama） | 不存入 Git，由 `scripts/fetch_models.py` 從 https://huggingface.co/Carve/LaMa-ONNX 下載並驗證雜湊；上游 LICENSE 全文收入聲明檔；授權紀錄 `models/licenses/inpaint-lama.json`。訓練資料 Places365 的下載條款限非商業研究與教育用途，本專案不販售（D6）；若改為商業用途需重新評估 |
+| Real-ESRGAN x2plus 放大模型（SceneWorks 轉成 ONNX 的 real_esrgan_x2.onnx，1.5） | SHA-256 `7115ba92…9002c` | BSD-3-Clause（模型卡與上游 xinntao/Real-ESRGAN） | 不存入 Git，由 `scripts/fetch_models.py` 從 https://huggingface.co/SceneWorks/real-esrgan-onnx 下載並驗證雜湊；上游 LICENSE 全文收入聲明檔；授權紀錄 `models/licenses/upscale-realesrgan-x2.json`。訓練資料集條款尚未查核 |
 
 ## Rust 套件（連結進主程式）
 

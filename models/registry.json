@@ -104,6 +104,62 @@
       "license": "licenses/depth-anything-v2-small.json",
       "url": "https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model.onnx",
       "licenseUrl": "https://raw.githubusercontent.com/DepthAnything/Depth-Anything-V2/main/LICENSE"
+    },
+    {
+      "id": "inpaint-lama",
+      "version": "carve-lama-fp32",
+      "file": "files/lama_fp32.onnx",
+      "sha256": "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6",
+      "purpose": "Inpainting for object removal and old-photo repair (LaMa, big-lama)",
+      "input": {
+        "name": "image (1x3x512x512, 0..1) and mask (1x1x512x512, 1 = fill)",
+        "shape": [
+          1,
+          3,
+          512,
+          512
+        ]
+      },
+      "output": {
+        "name": "output (RGB 0..255)",
+        "shape": [
+          1,
+          3,
+          512,
+          512
+        ]
+      },
+      "license": "licenses/inpaint-lama.json",
+      "url": "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx",
+      "licenseUrl": "https://raw.githubusercontent.com/advimman/lama/main/LICENSE"
+    },
+    {
+      "id": "upscale-realesrgan-x2",
+      "version": "x2plus-sceneworks-onnx",
+      "file": "files/real_esrgan_x2.onnx",
+      "sha256": "7115ba92e8a1bfa63d68558ef006ef3d91273a068d321b1439f8bb1c9179002c",
+      "purpose": "2x super-resolution for upscaled export (Real-ESRGAN x2plus)",
+      "input": {
+        "name": "input",
+        "shape": [
+          1,
+          3,
+          -1,
+          -1
+        ]
+      },
+      "output": {
+        "name": "output",
+        "shape": [
+          1,
+          3,
+          -1,
+          -1
+        ]
+      },
+      "license": "licenses/upscale-realesrgan-x2.json",
+      "url": "https://huggingface.co/SceneWorks/real-esrgan-onnx/resolve/main/real_esrgan_x2.onnx",
+      "licenseUrl": "https://raw.githubusercontent.com/xinntao/Real-ESRGAN/master/LICENSE"
     }
   ]
 }

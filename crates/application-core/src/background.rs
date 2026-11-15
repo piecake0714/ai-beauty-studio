@@ -78,16 +78,32 @@ pub struct AnalysisReport {
 }
 
 /// Run `analyse` with the slot's model, GPU first, CPU if the GPU fails.
-fn run<T>(
+pub(crate) fn run<T>(
     registry: &Registry,
     slot: &ModelSlot,
     ctx: &JobContext,
     analyse: impl Fn(&AiSession) -> Result<T, EngineError>,
 ) -> Result<(T, AnalysisReport), JobError> {
-    ctx.progress(0.05, "load");
+    run_reporting(registry, slot, ctx, true, analyse)
+}
+
+/// Like [`run`], reporting progress only when `report` is true (callers
+/// that run a model several times report their own).
+pub(crate) fn run_reporting<T>(
+    registry: &Registry,
+    slot: &ModelSlot,
+    ctx: &JobContext,
+    report: bool,
+    analyse: impl Fn(&AiSession) -> Result<T, EngineError>,
+) -> Result<(T, AnalysisReport), JobError> {
+    if report {
+        ctx.progress(0.05, "load");
+    }
     let (session, model) = slot.get(registry, Provider::DirectMl)?;
     ctx.check()?;
-    ctx.progress(0.3, "run");
+    if report {
+        ctx.progress(0.3, "run");
+    }
     let started = Instant::now();
     let mut fallback_reason = session.fallback_reason().map(str::to_string);
     let (value, used) = match analyse(&session) {
@@ -103,7 +119,9 @@ fn run<T>(
         Err(error) => return Err(JobError::new("inference_failed", error.to_string())),
     };
     ctx.check()?;
-    ctx.progress(1.0, "done");
+    if report {
+        ctx.progress(1.0, "done");
+    }
     Ok((
         value,
         AnalysisReport {

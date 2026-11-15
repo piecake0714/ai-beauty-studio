@@ -389,4 +389,83 @@ void heal_spots(cv::Mat& bgr, int first_col, double x, double y, double scale_x,
     }
 }
 
+namespace {
+
+// Self-guided filter on one float channel.
+cv::Mat guided_one(const cv::Mat& guide, const cv::Mat& p, int radius, double eps) {
+    const cv::Mat mg = box(guide, radius), mp = box(p, radius);
+    const cv::Mat cov = box(guide.mul(p), radius) - mg.mul(mp);
+    const cv::Mat var = box(guide.mul(guide), radius) - mg.mul(mg);
+    cv::Mat a;
+    cv::divide(cov, var + eps, a);
+    const cv::Mat b = mp - a.mul(mg);
+    return box(a, radius).mul(guide) + box(b, radius);
+}
+
+struct NoiseRadii {
+    int luminance = 0;  // 0: off
+    int colour = 0;
+};
+
+NoiseRadii noise_radii(const aibs_portrait& portrait, double scale) {
+    NoiseRadii r;
+    const double l = strength_of(portrait.noise_luminance), c = strength_of(portrait.noise_color);
+    // Sizes in source pixels, shown at the render's scale; too small to
+    // see when zoomed far out.
+    if (l > 0) {
+        const double size = (1.0 + 2.0 * l) * scale;
+        if (size >= 0.5) r.luminance = std::max(1, static_cast<int>(std::lround(size)));
+    }
+    if (c > 0) {
+        const double size = (2.0 + 6.0 * c) * scale;
+        if (size >= 0.5) r.colour = std::max(1, static_cast<int>(std::lround(size)));
+    }
+    return r;
+}
+
+}  // namespace
+
+int noise_margin(const aibs_portrait* portrait, double scale_x, double scale_y) {
+    if (portrait == nullptr) return 0;
+    const NoiseRadii r = noise_radii(*portrait, std::max(scale_x, scale_y));
+    const int widest = std::max(r.luminance, r.colour);
+    return widest > 0 ? 4 * widest + 2 : 0;
+}
+
+void reduce_noise(cv::Mat& bgr, int first_col, double scale_x, double scale_y, const aibs_portrait& portrait) {
+    if (first_col >= bgr.cols) return;
+    first_col = std::max(first_col, 0);
+    const NoiseRadii r = noise_radii(portrait, std::sqrt(scale_x * scale_y));
+    if (r.luminance == 0 && r.colour == 0) return;
+    const double l = strength_of(portrait.noise_luminance), c = strength_of(portrait.noise_color);
+    // Filter the whole buffer (its margin gives the neighbours), change
+    // only the columns from first_col on.
+    const cv::Rect roi(first_col, 0, bgr.cols - first_col, bgr.rows);
+    cv::Mat ycrcb;
+    cv::cvtColor(bgr, ycrcb, cv::COLOR_BGR2YCrCb);
+    ycrcb.convertTo(ycrcb, CV_32FC3, 1.0 / 255.0);
+    std::vector<cv::Mat> planes;
+    cv::split(ycrcb, planes);
+    const cv::Mat y = planes[0].clone();
+    if (r.luminance > 0) {
+        // Edge-preserving: flat areas (variance below eps) smooth, edges stay.
+        const double e = 0.012 + 0.04 * l;
+        const cv::Mat smooth = guided_one(y, y, r.luminance, e * e);
+        planes[0] = y + (smooth - y) * l;
+    }
+    if (r.colour > 0) {
+        // Colour follows the brightness edges, so it does not bleed.
+        const double e = 0.02 + 0.06 * c;
+        for (int k = 1; k <= 2; ++k) {
+            const cv::Mat smooth = guided_one(y, planes[k], r.colour, e * e);
+            planes[k] = planes[k] + (smooth - planes[k]) * c;
+        }
+    }
+    cv::merge(planes, ycrcb);
+    cv::Mat y8, out;
+    ycrcb.convertTo(y8, CV_8UC3, 255.0);
+    cv::cvtColor(y8, out, cv::COLOR_YCrCb2BGR);
+    out(roi).copyTo(bgr(roi));
+}
+
 }  // namespace aibs

@@ -26,6 +26,7 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::document::{Adjustments, History};
 use crate::files::{self, FileRef, Located};
+use crate::inpaint::PatchData;
 use crate::models::ModelRef;
 
 /// File name extension of projects.
@@ -194,6 +195,19 @@ pub struct ProjectFile {
     pub images: Vec<FileRef>,
     #[serde(default)]
     pub preview: Option<String>,
+    /// Object-removal and repair patches; their pixels are PNG entries.
+    #[serde(default)]
+    pub patches: Vec<PatchEntry>,
+}
+
+/// A patch inside the container: where it goes, and the entry with its
+/// RGBA pixels.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatchEntry {
+    #[serde(flatten)]
+    pub patch: PatchData,
+    pub entry: String,
 }
 
 /// Which model produced each AI result.
@@ -215,6 +229,8 @@ pub struct Snapshot<'a> {
     /// The models that produced the faces, matte and shape.
     pub models: AnalysisModels<'a>,
     pub images: &'a [FileRef],
+    /// Object-removal and repair patches.
+    pub patches: &'a [PatchData],
     /// A small rendering of the edited image (RGBA).
     pub preview: Option<&'a RgbaImage>,
     pub saved_at: u64,
@@ -222,6 +238,11 @@ pub struct Snapshot<'a> {
 
 fn engine_error(what: &str) -> impl Fn(engine_sys::EngineError) -> ProjectError + '_ {
     move |e| ProjectError::Damaged(format!("{what}: {e}"))
+}
+
+/// The entry holding a patch's coverage, next to its colour entry.
+fn alpha_entry(colour: &str) -> String {
+    format!("{}-alpha.png", colour.trim_end_matches(".png"))
 }
 
 fn rgb_of(image: &RgbaImage) -> Vec<u8> {
@@ -272,6 +293,21 @@ pub fn save(path: &Path, snapshot: &Snapshot) -> Result<(), ProjectError> {
         }
         None => None,
     };
+    let mut patch_entries = Vec::new();
+    let mut patch_names = Vec::new();
+    for patch in snapshot.patches {
+        // Colour and coverage as two images (images are read back without
+        // their own transparency).
+        let rgb: Vec<u8> = patch.rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+        let alpha: Vec<u8> = patch.rgba.chunks_exact(4).map(|p| p[3]).collect();
+        let (w, h) = (patch.pixel_width, patch.pixel_height);
+        let colour = engine_sys::encode(&rgb, w, h, 3, ImageFormat::Png).map_err(engine_error("patch"))?;
+        let coverage = engine_sys::encode(&alpha, w, h, 1, ImageFormat::Png).map_err(engine_error("patch"))?;
+        let name = format!("patches/{}.png", patch.id);
+        patch_entries.push(PatchEntry { patch: patch.clone(), entry: name.clone() });
+        patch_names.push((alpha_entry(&name), coverage));
+        patch_names.push((name, colour));
+    }
     let (states, index) = snapshot.history.parts();
     let file = ProjectFile {
         format: FORMAT_NAME.to_string(),
@@ -288,6 +324,7 @@ pub fn save(path: &Path, snapshot: &Snapshot) -> Result<(), ProjectError> {
         shape,
         images: snapshot.images.iter().map(relative).collect(),
         preview,
+        patches: patch_entries,
     };
     let json = serde_json::to_vec_pretty(&file).map_err(io::Error::other)?;
 
@@ -296,8 +333,8 @@ pub fn save(path: &Path, snapshot: &Snapshot) -> Result<(), ProjectError> {
         let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
         zip.start_file(PROJECT_ENTRY, options).map_err(io::Error::other)?;
         zip.write_all(&json)?;
-        for (name, bytes) in &entries {
-            zip.start_file(*name, options).map_err(io::Error::other)?;
+        for (name, bytes) in entries.iter().map(|(n, b)| (*n, b)).chain(patch_names.iter().map(|(n, b)| (n.as_str(), b))) {
+            zip.start_file(name, options).map_err(io::Error::other)?;
             zip.write_all(bytes)?;
         }
         zip.finish().map_err(io::Error::other)?;
@@ -397,6 +434,7 @@ pub struct Loaded {
     pub matte: Option<Matte>,
     pub shape: Option<Shape>,
     pub images: Vec<BackgroundRef>,
+    pub patches: Vec<PatchData>,
 }
 
 /// Read the project at `path`. The original photo is looked for where the
@@ -470,7 +508,25 @@ pub fn load(path: &Path, original_override: Option<&Path>) -> Result<Loaded, Pro
             },
         })
         .collect();
+    let mut patches = Vec::new();
+    for entry in &file.patches {
+        let colour = engine_sys::decode_rgba8(&read_entry(&mut archive, &entry.entry)?, 0).map_err(engine_error("patch"))?;
+        let coverage = engine_sys::decode_rgba8(&read_entry(&mut archive, &alpha_entry(&entry.entry))?, 0)
+            .map_err(engine_error("patch"))?;
+        let size = (entry.patch.pixel_width, entry.patch.pixel_height);
+        if (colour.width, colour.height) != size || (coverage.width, coverage.height) != size {
+            return Err(ProjectError::Damaged(format!("patch {} has the wrong size", entry.patch.id)));
+        }
+        let rgba = colour
+            .pixels
+            .chunks_exact(4)
+            .zip(coverage.pixels.chunks_exact(4))
+            .flat_map(|(c, a)| [c[0], c[1], c[2], a[0]])
+            .collect();
+        patches.push(PatchData { rgba, ..entry.patch.clone() });
+    }
     Ok(Loaded {
+        patches,
         history: History::from_parts(file.history.states.clone(), file.history.index),
         faces: file.faces.as_ref().map(|faces| faces.iter().map(Face::from).collect()),
         original_path,
@@ -529,6 +585,7 @@ mod tests {
             shape: None,
             models: AnalysisModels::default(),
             images: &[],
+            patches: &[],
             preview,
             saved_at: 1_700_000_000,
         }
@@ -546,6 +603,17 @@ mod tests {
         fs::write(&backdrop, PNG).unwrap();
         let backgrounds = [FileRef::of(&backdrop).unwrap()];
         let preview = engine_sys::Source::open(PNG).unwrap().render_fit(32).unwrap();
+        let patches = vec![PatchData {
+            id: 3,
+            x: 4.0,
+            y: 5.0,
+            width: 10.0,
+            height: 6.0,
+            pixel_width: 5,
+            pixel_height: 3,
+            rgba: (0..60).map(|i| (i * 4) as u8).collect(),
+            model: Some(ModelRef { id: "inpaint-lama".into(), version: "carve-lama-fp32".into() }),
+        }];
         let path = f.dir.join("projects").join("我的專案.aibs");
         let yunet = ModelRef { id: "face-yunet".into(), version: "2023mar".into() };
         let birefnet = ModelRef { id: "background-birefnet-lite".into(), version: "v1".into() };
@@ -555,12 +623,14 @@ mod tests {
             shape: Some(&shape),
             models: AnalysisModels { faces: Some(&yunet), matte: Some(&birefnet), shape: None },
             images: &backgrounds,
+            patches: &patches,
             ..snapshot(&f, &history, Some(&preview))
         };
         save(&path, &snap).unwrap();
         assert!(is_project_path(&path));
 
         let loaded = load(&path, None).unwrap();
+        assert_eq!(loaded.patches, patches);
         assert_eq!(loaded.original_path, f.original);
         assert_eq!(loaded.history.state(), history.state());
         assert_eq!(loaded.history.parts().0.len(), 3);
@@ -630,6 +700,7 @@ mod tests {
             shape: None,
             images: vec![],
             preview: None,
+            patches: vec![],
         })
         .unwrap();
         assert_eq!(migrate(value.clone()).err().unwrap().code(), "project_newer_version");

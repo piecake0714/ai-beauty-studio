@@ -101,6 +101,8 @@ function fakeApi(overrides: Partial<Api> = {}): Api {
       { id: "user:Mine", name: "Mine", builtin: false },
     ]),
     importLut: vi.fn(async () => ({ id: "user:New", name: "New", builtin: false })),
+    removeObject: vi.fn(async () => 31),
+    repairOldPhoto: vi.fn(async () => 32),
     pickLut: vi.fn(async () => "C:\\looks\\New.cube"),
     facesStatus: vi.fn(async () => ({ serial, status: { state: "detecting" as const } })),
     onFaces: vi.fn(async () => () => {}),
@@ -588,7 +590,7 @@ describe("app store", () => {
     const api = fakeApi();
     const store = createAppStore(api);
     await store.getState().openPath("C:\\照片\\a.jpg");
-    const options = { format: "jpeg" as const, quality: 92, longSide: null };
+    const options = { format: "jpeg" as const, quality: 92, longSide: null, upscale: 1 as const };
     await store.getState().exportImage(options, labels);
     expect(api.pickSavePath).toHaveBeenCalledWith("J", "jpg", "C:\\照片\\a-edited.jpg");
     expect(api.exportImage).toHaveBeenCalledWith("C:\\out\\saved.jpg", options);
@@ -787,5 +789,44 @@ describe("app store", () => {
     expect(store.getState().live.lut.id).toBe("user:Mine");
     await store.getState().chooseLut("");
     expect(store.getState().live.lut.id).toBe("");
+  });
+
+  it("removes painted objects and repairs old photos as single undoable steps", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    await store.getState().openPath("C:\\a.jpg");
+    store.getState().setTool("remove");
+    store.getState().setBrush({ size: 0.1 });
+    store.getState().beginStroke(5, 5);
+    store.getState().extendStroke(20, 5);
+    await store.getState().endStroke();
+    // Painting for removal does not change the document.
+    expect(store.getState().edit?.canUndo).toBe(false);
+    expect(store.getState().removeStrokes).toHaveLength(1);
+    await store.getState().startRemoval();
+    expect(api.removeObject).toHaveBeenCalledWith([{ points: [5, 5, 20, 5], size: 4, hardness: 100, opacity: 100, erase: false }]);
+    expect(store.getState().aiTask).toMatchObject({ kind: "remove", state: "running", jobId: 31 });
+    store.getState().receiveJobUpdate({ state: "progress", id: 31, fraction: 0.5, stage: "run" });
+    expect(store.getState().aiTask).toMatchObject({ fraction: 0.5 });
+    store.getState().receiveJobUpdate({ state: "finished", id: 31, result: { serial: 1, patchId: 7 } });
+    await vi.waitFor(() => expect(store.getState().edit?.adjustments.removals).toEqual([7]));
+    expect(store.getState().removeStrokes).toEqual([]);
+    expect(store.getState().aiTask).toBeNull();
+    await store.getState().undo();
+    expect(store.getState().live.removals).toEqual([]);
+
+    // Repair: the core's suggested adjustments become one step.
+    await store.getState().startRepair(60);
+    expect(api.repairOldPhoto).toHaveBeenCalledWith(60);
+    const repaired = { ...store.getState().live, removals: [8, 9], noiseLuminance: 40, vibrance: 9 };
+    store.getState().receiveJobUpdate({ state: "finished", id: 32, result: { serial: 1, adjustments: repaired } });
+    await vi.waitFor(() => expect(store.getState().edit?.adjustments.noiseLuminance).toBe(40));
+    expect(store.getState().live.removals).toEqual([8, 9]);
+    // A failure is shown; another job's updates are ignored.
+    await store.getState().startRepair(10);
+    store.getState().receiveJobUpdate({ state: "failed", id: 999, code: "x", detail: "" });
+    expect(store.getState().aiTask).toMatchObject({ state: "running" });
+    store.getState().receiveJobUpdate({ state: "failed", id: 32, code: "inference_failed", detail: "" });
+    expect(store.getState().aiTask).toMatchObject({ kind: "repair", state: "failed", code: "inference_failed" });
   });
 });
