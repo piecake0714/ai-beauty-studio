@@ -4,6 +4,7 @@
 #include "aibs/engine.h"
 #include "check.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -167,6 +168,42 @@ void test_shading_follows_shape() {
     CHECK(bad == nullptr);
 }
 
+// A flat-topped disc standing out from the background (a depth jump, as at
+// a person's outline): a strong, wide light must not draw a bright or dark
+// rim at the jump.
+void test_no_rim_at_depth_jumps() {
+    const int w = 240, h = 200;
+    Source source;
+    CHECK(open_mat(cv::Mat(h, w, CV_8UC3, cv::Scalar(120, 120, 120)), source));
+    std::vector<float> depth(static_cast<size_t>(w) * h);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+            depth[static_cast<size_t>(y) * w + x] = std::hypot(x + 0.5 - 120.0, y + 0.5 - 100.0) < 60.0 ? 1.0f : 0.0f;
+    Shape shape;
+    CHECK(aibs_shape_create(depth.data(), w, h, w, h, &shape.ptr) == AIBS_OK);
+    aibs_light light = make_light(AIBS_LIGHT_SOFTBOX, -0.3f, 0.5f);
+    light.intensity = 100;
+    light.size = 100;
+    light.height = 20;
+    light.shape = shape.ptr;
+    Image lit;
+    CHECK(render(source, w, h, &light, lit));
+    if (!lit.img.data) return;
+    // Along the middle row, brightness should change smoothly across both
+    // edges of the disc (x = 60 and x = 180): no pixel far outside the
+    // range of its neighbours 12 pixels away.
+    int worst = 0;
+    for (const int edge : {60, 180}) {
+        for (int x = edge - 6; x <= edge + 6; ++x) {
+            const int v = lit.green(x, 100);
+            const int a = lit.green(x - 12, 100), b = lit.green(x + 12, 100);
+            worst = std::max(worst, std::max(v - std::max(a, b), std::min(a, b) - v));
+        }
+    }
+    std::printf("info: depth jump, largest rim beyond the neighbours: %d\n", worst);
+    CHECK(worst <= 3);
+}
+
 void test_subject_only() {
     const int w = 120, h = 80;
     Source source;
@@ -248,6 +285,7 @@ void run_light_tests() {
     test_flat_light();
     test_reflector_fills_shadows();
     test_shading_follows_shape();
+    test_no_rim_at_depth_jumps();
     test_subject_only();
     test_shape_estimation();
 }

@@ -29,6 +29,12 @@ constexpr int kPatch = 14;
 constexpr int kShapeSide = 1024;
 // How deep the photo's relief is taken to be, relative to its longer side.
 constexpr double kRelief = 0.35;
+// Slopes (tangent of the tilt) from which depth counts as a jump between
+// objects rather than a surface: fully a jump from kSteepTo.
+constexpr double kSteepFrom = 1.5;
+constexpr double kSteepTo = 3.0;
+// Most a light may darken a surface facing away from it, in stops.
+constexpr double kMaxDarkening = 1.0;
 
 struct Image {
     aibs_image img{};
@@ -101,14 +107,37 @@ aibs_shape* make_shape(const cv::Mat& depth_in, int source_width, int source_hei
     cv::Sobel(d, gx, CV_32F, 1, 0, 3, 1.0 / 8.0, 0, cv::BORDER_REPLICATE);
     cv::Sobel(d, gy, CV_32F, 0, 1, 3, 1.0 / 8.0, 0, cv::BORDER_REPLICATE);
     const double relief = kRelief * longer;
+
+    // Depth jumps (a subject's outline against the background) are not
+    // surfaces: their estimated position is blurred and a few pixels off,
+    // and shading them draws a bright/dark rim beside the real edge (a
+    // ghost outline). Treat steep slopes as jumps and keep them flat.
+    cv::Mat slope;
+    cv::magnitude(gx, gy, slope);
+    slope *= relief;
+    cv::Mat jump(h, w, CV_32F);
+    for (int row = 0; row < h; ++row) {
+        const float* sl = slope.ptr<float>(row);
+        float* j = jump.ptr<float>(row);
+        for (int col = 0; col < w; ++col) {
+            const double t = std::clamp((sl[col] - kSteepFrom) / (kSteepTo - kSteepFrom), 0.0, 1.0);
+            j[col] = static_cast<float>(t * t * (3.0 - 2.0 * t));
+        }
+    }
+    const int guard = std::max(2, longer / 256);
+    cv::dilate(jump, jump, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2 * guard + 1, 2 * guard + 1)));
+    jump = box(jump, guard);
+
     auto* shape = new aibs_shape();
     shape->normals.create(h, w, CV_32FC3);
     for (int row = 0; row < h; ++row) {
         const float* px = gx.ptr<float>(row);
         const float* py = gy.ptr<float>(row);
+        const float* j = jump.ptr<float>(row);
         cv::Vec3f* n = shape->normals.ptr<cv::Vec3f>(row);
         for (int col = 0; col < w; ++col) {
-            const double nx = -px[col] * relief, ny = -py[col] * relief;
+            const double keep = 1.0 - j[col];
+            const double nx = -px[col] * relief * keep, ny = -py[col] * relief * keep;
             const double len = std::sqrt(nx * nx + ny * ny + 1.0);
             n[col] = cv::Vec3f(static_cast<float>(nx / len), static_cast<float>(ny / len), static_cast<float>(1.0 / len));
         }
@@ -208,7 +237,7 @@ void apply_light(cv::Mat& bgr, int first_col, double x, double y, double scale_x
                 } else {
                     const double stops = light.type == AIBS_LIGHT_DIFFUSE ? amount * (0.7 * lit + 0.4 * side)
                                                                           : amount * (0.5 * lit + 1.5 * side);
-                    const double gain = std::exp2(stops);
+                    const double gain = std::exp2(std::max(stops, -kMaxDarkening));
                     for (int k = 0; k < 3; ++k) c[k] *= gain >= 1.0 ? 1.0 + (gain - 1.0) * tint[k] : gain;
                 }
                 for (int k = 0; k < 3; ++k) q[k] = to_display(c[k]);
