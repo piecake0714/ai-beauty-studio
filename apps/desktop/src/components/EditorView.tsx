@@ -1,6 +1,50 @@
 import { useApp, useI18n } from "../context";
 import { folderOf, formatBytes } from "../format";
+import { AdjustPanel } from "./AdjustPanel";
 import { ImageCanvas } from "./ImageCanvas";
+
+function EditToolbar() {
+  const { t } = useI18n();
+  const canUndo = useApp((s) => s.edit?.canUndo ?? false);
+  const canRedo = useApp((s) => s.edit?.canRedo ?? false);
+  const undo = useApp((s) => s.undo);
+  const redo = useApp((s) => s.redo);
+  const splitView = useApp((s) => s.splitView);
+  const setSplitView = useApp((s) => s.setSplitView);
+  const setHoldOriginal = useApp((s) => s.setHoldOriginal);
+
+  return (
+    <div className="edit-toolbar" role="toolbar" aria-label={t("nav.editor")}>
+      <button type="button" className="ghost small" onClick={() => void undo()} disabled={!canUndo} title={`${t("edit.undo")} (Ctrl+Z)`}>
+        ↶ {t("edit.undo")}
+      </button>
+      <button type="button" className="ghost small" onClick={() => void redo()} disabled={!canRedo} title={`${t("edit.redo")} (Ctrl+Y)`}>
+        ↷ {t("edit.redo")}
+      </button>
+      <div className="spacer" />
+      <button
+        type="button"
+        className={splitView ? "ghost small pressed" : "ghost small"}
+        aria-pressed={splitView}
+        onClick={() => setSplitView(!splitView)}
+      >
+        {t("compare.split")}
+      </button>
+      <button
+        type="button"
+        className="ghost small"
+        title={`${t("compare.hold")} (\\)`}
+        onPointerDown={() => setHoldOriginal(true)}
+        onPointerUp={() => setHoldOriginal(false)}
+        onPointerLeave={() => setHoldOriginal(false)}
+        onKeyDown={(event) => (event.key === " " || event.key === "Enter") && setHoldOriginal(true)}
+        onKeyUp={() => setHoldOriginal(false)}
+      >
+        {t("compare.hold")}
+      </button>
+    </div>
+  );
+}
 
 function ZoomControls() {
   const { t } = useI18n();
@@ -51,12 +95,14 @@ export function EditorView() {
 
   return (
     <main className="editor">
+      <EditToolbar />
       <section className="canvas-area">
         <ImageCanvas />
       </section>
 
-      <aside className="side-panel" aria-label={t("info.title")}>
-        <h2>{t("info.title")}</h2>
+      <aside className="side-panel">
+        <AdjustPanel />
+        <h2 className="info-title">{t("info.title")}</h2>
         <dl className="info-list">
           <dt>{t("info.name")}</dt>
           <dd>{info?.name ?? unknown}</dd>

@@ -1,4 +1,5 @@
 #include "aibs/engine.h"
+#include "../../color-engine/src/adjust.h"
 
 #include <algorithm>
 #include <climits>
@@ -75,6 +76,8 @@ void aibs_source_size(const aibs_source* source, uint32_t* width, uint32_t* heig
 int32_t aibs_source_render(const aibs_source* source,
                            double x, double y, double w, double h,
                            uint32_t out_width, uint32_t out_height,
+                           const aibs_adjustments* adjustments,
+                           uint32_t original_columns,
                            aibs_image* out) {
     if (out == nullptr) {
         return AIBS_ERR_INVALID_ARGUMENT;
@@ -122,6 +125,14 @@ int32_t aibs_source_render(const aibs_source* source,
         cv::warpAffine(level, bgr, inverse, cv::Size(static_cast<int>(out_width), static_cast<int>(out_height)),
                        (enlarging ? cv::INTER_NEAREST : cv::INTER_LINEAR) | cv::WARP_INVERSE_MAP,
                        cv::BORDER_REPLICATE);
+
+        // Adjust everything right of the before/after split.
+        if (adjustments != nullptr && !aibs::is_identity(*adjustments) && original_columns < out_width) {
+            const cv::Mat lut = aibs::build_lut(*adjustments);
+            const int first = static_cast<int>(original_columns);
+            cv::Mat adjusted = bgr.colRange(first, bgr.cols);
+            cv::LUT(adjusted, lut, adjusted);
+        }
 
         cv::Mat rgba;
         cv::cvtColor(bgr, rgba, cv::COLOR_BGR2RGBA);

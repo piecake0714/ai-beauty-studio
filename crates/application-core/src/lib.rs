@@ -4,6 +4,7 @@
 //! byte buffers to the engine. Original files are opened read-only and are
 //! never written.
 
+pub mod document;
 pub mod info;
 pub mod settings;
 
@@ -193,6 +194,48 @@ mod tests {
         assert_eq!((source.width(), source.height()), (64, 48));
         assert_eq!(open_document(&fixture("corrupted.jpg")).unwrap_err().code(), "not_an_image");
         assert_eq!(open_document(&fixture("nope.jpg")).unwrap_err().code(), "not_found");
+    }
+
+    /// Acceptance check: 200 mixed edits, all undone, give back exactly the
+    /// starting picture; redone, exactly the final one. The file is untouched.
+    #[test]
+    fn undoing_200_edits_restores_the_exact_original_render() {
+        use crate::document::{Adjustments, History};
+
+        let path = fixture("gradient_64x48.png");
+        let file_before = fs::read(&path).unwrap();
+        let source = open_document(&path).unwrap();
+        let render = |history: &History| {
+            let engine = history.current().to_engine();
+            source
+                .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, Some(&engine), 0)
+                .unwrap()
+                .pixels
+        };
+
+        let mut history = History::default();
+        let start = render(&history);
+        // Deterministic pseudo-random edits.
+        let mut seed: u32 = 12345;
+        let mut next = |range: f32| {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+            ((seed >> 8) as f32 / (1u32 << 24) as f32 * 2.0 - 1.0) * range
+        };
+        for _ in 0..200 {
+            history.commit(Adjustments {
+                exposure: next(3.0),
+                brightness: next(100.0),
+                contrast: next(100.0),
+            });
+        }
+        let end = render(&history);
+        assert_ne!(start, end);
+
+        while history.undo() {}
+        assert_eq!(render(&history), start);
+        while history.redo() {}
+        assert_eq!(render(&history), end);
+        assert_eq!(fs::read(&path).unwrap(), file_before);
     }
 
     #[test]

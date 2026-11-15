@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { EditorView } from "./components/EditorView";
 import { HomeView } from "./components/HomeView";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { TopBar } from "./components/TopBar";
-import { useApp, useI18n } from "./context";
+import { useApp, useDiscardPrompt, useI18n } from "./context";
 import { resolveTheme } from "./format";
 import { errorMessage } from "./i18n";
 
@@ -39,6 +39,13 @@ export function App() {
   const zoomStep = useApp((s) => s.zoomStep);
   const zoomTo = useApp((s) => s.zoomTo);
   const fitToView = useApp((s) => s.fitToView);
+  const undo = useApp((s) => s.undo);
+  const redo = useApp((s) => s.redo);
+  const setHoldOriginal = useApp((s) => s.setHoldOriginal);
+  const confirmDiscard = useApp((s) => s.confirmDiscard);
+  const api = useApp((s) => s.api);
+  const openPrompt = useDiscardPrompt("open");
+  const closePrompt = useDiscardPrompt("close");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
 
@@ -52,15 +59,22 @@ export function App() {
     document.documentElement.lang = language;
   }, [language]);
 
-  // Keyboard shortcuts. Ctrl+O works everywhere; zoom keys in the editor.
-  // preventDefault also stops the web view's own page zoom on these keys.
+  // Keyboard shortcuts. Ctrl+O works everywhere; zoom, undo and the
+  // hold-to-compare key in the editor. preventDefault also stops the web
+  // view's own handling of these keys (such as page zoom).
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (!event.ctrlKey || event.altKey || settingsOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (settingsOpen) return;
+      if (view === "editor" && event.code === "Backslash" && !event.ctrlKey && !event.altKey) {
+        event.preventDefault();
+        setHoldOriginal(true);
+        return;
+      }
+      if (!event.ctrlKey || event.altKey) return;
       const key = event.key.toLowerCase();
       if (key === "o" && !event.shiftKey) {
         event.preventDefault();
-        void pickAndOpen(t("imageFiles"));
+        void pickAndOpen(t("imageFiles"), openPrompt);
         return;
       }
       if (view !== "editor") return;
@@ -70,6 +84,8 @@ export function App() {
         "=": () => zoomStep(1),
         "+": () => zoomStep(1),
         "-": () => zoomStep(-1),
+        z: () => void (event.shiftKey ? redo() : undo()),
+        y: () => void redo(),
       };
       const action = actions[key];
       if (action) {
@@ -77,9 +93,40 @@ export function App() {
         action();
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [pickAndOpen, t, view, settingsOpen, fitToView, zoomTo, zoomStep]);
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.code === "Backslash") setHoldOriginal(false);
+    };
+    const onBlur = () => setHoldOriginal(false);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, [pickAndOpen, t, view, settingsOpen, fitToView, zoomTo, zoomStep, undo, redo, setHoldOriginal, openPrompt]);
+
+  // Ask before closing the window would discard adjustments.
+  const closePromptRef = useRef(closePrompt);
+  closePromptRef.current = closePrompt;
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    api
+      .onCloseRequested(() => confirmDiscard(closePromptRef.current))
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {
+        // Without the listener the window simply closes as before.
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [api, confirmDiscard]);
 
   if (!ready) return <div className="app" aria-busy="true" />;
 

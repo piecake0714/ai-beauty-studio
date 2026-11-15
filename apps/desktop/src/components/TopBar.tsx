@@ -1,4 +1,4 @@
-import { useApp, useI18n } from "../context";
+import { useApp, useDiscardPrompt, useI18n } from "../context";
 import type { View } from "../store";
 
 export function TopBar({ onOpenSettings }: { onOpenSettings: () => void }) {
@@ -8,6 +8,7 @@ export function TopBar({ onOpenSettings }: { onOpenSettings: () => void }) {
   const opening = useApp((s) => s.opening);
   const showView = useApp((s) => s.showView);
   const pickAndOpen = useApp((s) => s.pickAndOpen);
+  const discard = useDiscardPrompt("open");
 
   const tab = (target: View, label: string, disabled = false) => (
     <button
@@ -30,7 +31,7 @@ export function TopBar({ onOpenSettings }: { onOpenSettings: () => void }) {
         {tab("editor", t("nav.editor"), !hasDocument)}
       </nav>
       <div className="spacer" />
-      <button type="button" className="primary" onClick={() => pickAndOpen(t("imageFiles"))} disabled={opening}>
+      <button type="button" className="primary" onClick={() => pickAndOpen(t("imageFiles"), discard)} disabled={opening}>
         {opening ? t("opening") : t("openImage")}
       </button>
       <button type="button" className="ghost" onClick={onOpenSettings}>

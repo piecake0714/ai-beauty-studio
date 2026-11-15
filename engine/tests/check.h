@@ -37,3 +37,4 @@ inline std::vector<uint8_t> read_fixture(const std::string& name) {
 
 void run_decode_tests();
 void run_source_tests();
+void run_adjust_tests();

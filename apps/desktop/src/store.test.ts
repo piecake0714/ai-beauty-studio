@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Api } from "./api";
 import { FRAME_HEADER_LEN } from "./frame";
 import { createAppStore, defaultSettings } from "./store";
-import type { LanguagePreference, Settings, ThemePreference } from "./types";
+import { NO_ADJUSTMENTS, type Adjustments, type EditState, type LanguagePreference, type Settings, type ThemePreference } from "./types";
 
 function frameBuffer(width: number, height: number): ArrayBuffer {
   const buffer = new ArrayBuffer(FRAME_HEADER_LEN + width * height * 4);
@@ -17,15 +17,45 @@ function frameBuffer(width: number, height: number): ArrayBuffer {
 /** A fake core that keeps settings in memory like the real one. */
 function fakeApi(overrides: Partial<Api> = {}): Api {
   let settings: Settings = { ...defaultSettings, recent: [] };
+  // Edit history like the core's: snapshots and a position.
+  let states: Adjustments[] = [NO_ADJUSTMENTS];
+  let index = 0;
+  const editState = (): EditState => ({
+    adjustments: states[index],
+    canUndo: index > 0,
+    canRedo: index < states.length - 1,
+    edited: JSON.stringify(states[index]) !== JSON.stringify(NO_ADJUSTMENTS),
+  });
   const api: Api = {
     startup: vi.fn(async () => ({ settings, settingsRecovered: false, version: "0.1.0" })),
     getSettings: vi.fn(async () => settings),
     pickImage: vi.fn(async () => "C:\\照片\\a.jpg"),
     openImage: vi.fn(async (path: string) => {
       settings = { ...settings, recent: [{ path, openedAt: 1 }, ...settings.recent] };
+      states = [NO_ADJUSTMENTS];
+      index = 0;
       return frameBuffer(4, 3);
     }),
     renderView: vi.fn(async () => frameBuffer(4, 3)),
+    renderOverview: vi.fn(async () => frameBuffer(4, 3)),
+    editState: vi.fn(async () => editState()),
+    commitAdjustments: vi.fn(async (adjustments: Adjustments) => {
+      if (JSON.stringify(adjustments) !== JSON.stringify(states[index])) {
+        states = [...states.slice(0, index + 1), adjustments];
+        index = states.length - 1;
+      }
+      return editState();
+    }),
+    undo: vi.fn(async () => {
+      index = Math.max(0, index - 1);
+      return editState();
+    }),
+    redo: vi.fn(async () => {
+      index = Math.min(states.length - 1, index + 1);
+      return editState();
+    }),
+    confirm: vi.fn(async () => true),
+    onCloseRequested: vi.fn(async () => () => {}),
     thumbnail: vi.fn(async () => frameBuffer(2, 2)),
     fileInfo: vi.fn(async () => ({ name: "a.jpg", sizeBytes: 1234, format: "JPEG" as const })),
     setTheme: vi.fn(async (theme: ThemePreference) => (settings = { ...settings, theme })),
@@ -168,5 +198,91 @@ describe("app store", () => {
     store.getState().pan(-1000, 0);
     // At 100% a 20-pixel-wide view of a 40-pixel image stops at the right edge.
     expect(store.getState().camera?.cx).toBe(30);
+  });
+
+  it("loads the edit state when an image opens", async () => {
+    const store = createAppStore(fakeApi());
+    await store.getState().openPath("C:\\a.jpg");
+    expect(store.getState().edit).toEqual({ adjustments: NO_ADJUSTMENTS, canUndo: false, canRedo: false, edited: false });
+    expect(store.getState().live).toEqual(NO_ADJUSTMENTS);
+  });
+
+  it("shows slider changes live and records them as one step on commit", async () => {
+    const api = fakeApi();
+    const store = createAppStore(api);
+    await store.getState().openPath("C:\\a.jpg");
+    const firstOverview = store.getState().document?.overview;
+    for (const exposure of [0.1, 0.2, 0.3, 0.5]) store.getState().setLive({ ...NO_ADJUSTMENTS, exposure });
+    expect(api.commitAdjustments).not.toHaveBeenCalled();
+    await store.getState().commitLive();
+    expect(api.commitAdjustments).toHaveBeenCalledTimes(1);
+    expect(store.getState().edit?.adjustments.exposure).toBe(0.5);
+    expect(store.getState().edit?.canUndo).toBe(true);
+    expect(api.renderOverview).toHaveBeenCalledWith({ ...NO_ADJUSTMENTS, exposure: 0.5 });
+    expect(store.getState().document?.overview).not.toBe(firstOverview);
+  });
+
+  it("undoes and redoes, showing the restored values", async () => {
+    const store = createAppStore(fakeApi());
+    await store.getState().openPath("C:\\a.jpg");
+    store.getState().setLive({ ...NO_ADJUSTMENTS, contrast: 30 });
+    await store.getState().commitLive();
+    store.getState().setLive({ ...NO_ADJUSTMENTS, contrast: 30, brightness: -10 });
+    await store.getState().commitLive();
+    await store.getState().undo();
+    expect(store.getState().live).toEqual({ ...NO_ADJUSTMENTS, contrast: 30 });
+    await store.getState().undo();
+    expect(store.getState().live).toEqual(NO_ADJUSTMENTS);
+    expect(store.getState().edit?.canUndo).toBe(false);
+    await store.getState().redo();
+    await store.getState().redo();
+    expect(store.getState().live.brightness).toBe(-10);
+  });
+
+  it("resets all adjustments as one undoable step", async () => {
+    const store = createAppStore(fakeApi());
+    await store.getState().openPath("C:\\a.jpg");
+    store.getState().setLive({ exposure: 1, brightness: 5, contrast: 5 });
+    await store.getState().commitLive();
+    await store.getState().resetAdjustments();
+    expect(store.getState().edit?.edited).toBe(false);
+    await store.getState().undo();
+    expect(store.getState().live.exposure).toBe(1);
+  });
+
+  it("asks before opening another image over unsaved adjustments", async () => {
+    const prompt = { title: "t", message: "m", yes: "y", no: "n" };
+    const api = fakeApi({ confirm: vi.fn(async () => false) });
+    const store = createAppStore(api);
+    await store.getState().openPath("C:\\a.jpg", prompt);
+    expect(api.confirm).not.toHaveBeenCalled(); // nothing to lose yet
+    store.getState().setLive({ ...NO_ADJUSTMENTS, exposure: 1 });
+    await store.getState().commitLive();
+    await store.getState().openPath("C:\\b.jpg", prompt);
+    expect(api.confirm).toHaveBeenCalledWith("t", "m", "y", "n");
+    expect(store.getState().document?.path).toBe("C:\\a.jpg"); // declined: kept
+  });
+
+  it("opens over unsaved adjustments when the user agrees, starting fresh", async () => {
+    const prompt = { title: "t", message: "m", yes: "y", no: "n" };
+    const store = createAppStore(fakeApi());
+    await store.getState().openPath("C:\\a.jpg", prompt);
+    store.getState().setLive({ ...NO_ADJUSTMENTS, exposure: 1 });
+    await store.getState().commitLive();
+    await store.getState().openPath("C:\\b.jpg", prompt);
+    expect(store.getState().document?.path).toBe("C:\\b.jpg");
+    expect(store.getState().live).toEqual(NO_ADJUSTMENTS);
+  });
+
+  it("works out which columns show the original", () => {
+    const store = createAppStore(fakeApi());
+    expect(store.getState().originalColumns(1000)).toBe(0);
+    store.getState().setSplitView(true);
+    store.getState().setSplit(0.25);
+    expect(store.getState().originalColumns(1000)).toBe(250);
+    store.getState().setHoldOriginal(true);
+    expect(store.getState().originalColumns(1000)).toBe(1000);
+    store.getState().setSplit(5);
+    expect(store.getState().split).toBe(1);
   });
 });

@@ -40,9 +40,32 @@ extern "C" {
         h: f64,
         out_width: u32,
         out_height: u32,
+        adjustments: *const Adjustments,
+        original_columns: u32,
         out: *mut AibsImage,
     ) -> i32;
+    fn aibs_adjustments_lut(adjustments: *const Adjustments, lut: *mut u8) -> i32;
     fn aibs_source_free(source: *mut AibsSourceRaw);
+}
+
+/// Tone adjustments, matching `aibs_adjustments`. All zero leaves the image
+/// unchanged. Ranges: exposure -5..5 EV, brightness and contrast -100..100;
+/// the engine clamps values outside them.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Adjustments {
+    pub exposure: f32,
+    pub brightness: f32,
+    pub contrast: f32,
+}
+
+/// The 8-bit output for each 8-bit input value under `adjustments`.
+pub fn adjustments_lut(adjustments: &Adjustments) -> [u8; 256] {
+    let mut lut = [0u8; 256];
+    // SAFETY: both pointers are valid; the engine writes exactly 256 bytes.
+    let status = unsafe { aibs_adjustments_lut(adjustments, lut.as_mut_ptr()) };
+    debug_assert_eq!(status, AIBS_OK);
+    lut
 }
 
 /// Opaque engine type behind `aibs_source*`.
@@ -123,9 +146,8 @@ impl Source {
     }
 
     /// Render the region at (`x`, `y`) of size `w` x `h` source pixels into
-    /// an `out_width` x `out_height` image. Parts outside the source are
-    /// transparent.
-    #[allow(clippy::too_many_arguments)]
+    /// an `out_width` x `out_height` image, unadjusted. Parts outside the
+    /// source are transparent.
     pub fn render(
         &self,
         x: f64,
@@ -135,10 +157,40 @@ impl Source {
         out_width: u32,
         out_height: u32,
     ) -> Result<RgbaImage, EngineError> {
+        self.render_adjusted(x, y, w, h, out_width, out_height, None, 0)
+    }
+
+    /// Like [`Source::render`], applying `adjustments` to every output column
+    /// from `original_columns` on (the columns left of it show the original).
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_adjusted(
+        &self,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        out_width: u32,
+        out_height: u32,
+        adjustments: Option<&Adjustments>,
+        original_columns: u32,
+    ) -> Result<RgbaImage, EngineError> {
         let mut raw = empty_image();
-        // SAFETY: `self.raw` is valid for the lifetime of `self`; `raw` is writable.
+        let adjustments_ptr = adjustments.map_or(std::ptr::null(), |a| a as *const Adjustments);
+        // SAFETY: `self.raw` is valid for the lifetime of `self`; the
+        // adjustments pointer is null or valid for the call; `raw` is writable.
         status_to_result(unsafe {
-            aibs_source_render(self.raw, x, y, w, h, out_width, out_height, &mut raw)
+            aibs_source_render(
+                self.raw,
+                x,
+                y,
+                w,
+                h,
+                out_width,
+                out_height,
+                adjustments_ptr,
+                original_columns,
+                &mut raw,
+            )
         })?;
         // SAFETY: the render succeeded, so `raw` holds an engine image.
         Ok(unsafe { take_image(raw) })
@@ -293,6 +345,29 @@ mod tests {
         assert!(matches!(Source::open(CORRUPTED), Err(EngineError::DecodeFailed)));
         let source = Source::open(PNG).unwrap();
         assert!(matches!(source.render(0.0, 0.0, 0.0, 1.0, 1, 1), Err(EngineError::InvalidArgument)));
+    }
+
+    #[test]
+    fn adjustments_follow_the_lut_and_respect_the_split() {
+        let source = Source::open(PNG).unwrap();
+        let original = source.render(0.0, 0.0, 64.0, 48.0, 64, 48).unwrap();
+        let zero = Adjustments::default();
+        assert_eq!(adjustments_lut(&zero), std::array::from_fn::<u8, 256, _>(|i| i as u8));
+        let unchanged = source
+            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, Some(&zero), 0)
+            .unwrap();
+        assert_eq!(unchanged.pixels, original.pixels);
+
+        let darker = Adjustments { exposure: -1.0, brightness: 0.0, contrast: 0.0 };
+        let lut = adjustments_lut(&darker);
+        let split = source
+            .render_adjusted(0.0, 0.0, 64.0, 48.0, 64, 48, Some(&darker), 32)
+            .unwrap();
+        for col in [0usize, 31, 32, 63] {
+            let p = (10 * 64 + col) * 4;
+            let expected = if col < 32 { original.pixels[p] } else { lut[original.pixels[p] as usize] };
+            assert_eq!(split.pixels[p], expected, "column {col}");
+        }
     }
 
     #[test]

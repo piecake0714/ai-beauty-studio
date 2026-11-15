@@ -27,3 +27,23 @@ export interface Startup {
   settingsRecovered: boolean;
   version: string;
 }
+
+/** Tone adjustments; all zero leaves the image unchanged. */
+export interface Adjustments {
+  /** Stops (EV), -5 to +5. */
+  exposure: number;
+  /** -100 to +100. */
+  brightness: number;
+  /** -100 to +100. */
+  contrast: number;
+}
+
+export const NO_ADJUSTMENTS: Adjustments = { exposure: 0, brightness: 0, contrast: 0 };
+
+export interface EditState {
+  adjustments: Adjustments;
+  canUndo: boolean;
+  canRedo: boolean;
+  /** The image differs from the original. */
+  edited: boolean;
+}

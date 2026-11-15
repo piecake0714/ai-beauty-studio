@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
-import type { FileInfo, LanguagePreference, Settings, Startup, ThemePreference } from "./types";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ask, open } from "@tauri-apps/plugin-dialog";
+import type { Adjustments, EditState, FileInfo, LanguagePreference, Settings, Startup, ThemePreference } from "./types";
 
 /**
  * Everything the UI asks of the Rust core. The store depends on this
@@ -16,6 +17,17 @@ export interface Api {
   openImage(path: string): Promise<ArrayBuffer>;
   /** Render part of the open image. Rejects with "superseded" when a newer request arrived. */
   renderView(request: RenderRequest): Promise<ArrayBuffer>;
+  /** The whole open image with adjustments, at overview size. */
+  renderOverview(adjustments: Adjustments): Promise<ArrayBuffer>;
+  editState(): Promise<EditState>;
+  /** Record adjustments as one undoable step. */
+  commitAdjustments(adjustments: Adjustments): Promise<EditState>;
+  undo(): Promise<EditState>;
+  redo(): Promise<EditState>;
+  /** Ask a yes/no question; resolves true for yes. */
+  confirm(title: string, message: string, yes: string, no: string): Promise<boolean>;
+  /** Call `allowClose` when the user closes the window; closing is cancelled when it resolves false. */
+  onCloseRequested(allowClose: () => Promise<boolean>): Promise<() => void>;
   thumbnail(path: string): Promise<ArrayBuffer>;
   fileInfo(path: string): Promise<FileInfo>;
   setTheme(theme: ThemePreference): Promise<Settings>;
@@ -34,6 +46,10 @@ export interface RenderRequest {
   height: number;
   outWidth: number;
   outHeight: number;
+  /** What to show; may be uncommitted while a slider is being dragged. */
+  adjustments: Adjustments;
+  /** Leftmost output columns shown without adjustments (before/after). */
+  originalColumns: number;
 }
 
 export const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "tif", "tiff", "webp"];
@@ -51,6 +67,17 @@ export const tauriApi: Api = {
   },
   openImage: (path) => invoke("open_image", { path }),
   renderView: (request) => invoke("render_view", { request }),
+  renderOverview: (adjustments) => invoke("render_overview", { adjustments }),
+  editState: () => invoke("edit_state"),
+  commitAdjustments: (adjustments) => invoke("commit_adjustments", { adjustments }),
+  undo: () => invoke("undo"),
+  redo: () => invoke("redo"),
+  confirm: (title, message, yes, no) => ask(message, { title, kind: "warning", okLabel: yes, cancelLabel: no }),
+  async onCloseRequested(allowClose) {
+    return getCurrentWindow().onCloseRequested(async (event) => {
+      if (!(await allowClose())) event.preventDefault();
+    });
+  },
   thumbnail: (path) => invoke("thumbnail", { path }),
   fileInfo: (path) => invoke("file_info", { path }),
   setTheme: (theme) => invoke("set_theme", { theme }),

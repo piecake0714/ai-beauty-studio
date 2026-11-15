@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { errorCode } from "../api";
-import { useApp, useI18n } from "../context";
+import { useApp, useDiscardPrompt, useI18n } from "../context";
 import { fileName, folderOf, formatOpenedAt } from "../format";
 import { parseFrame, type Frame } from "../frame";
 import type { RecentFile } from "../types";
@@ -45,11 +45,12 @@ function RecentCard({ entry }: { entry: RecentFile }) {
   const openPath = useApp((s) => s.openPath);
   const removeRecent = useApp((s) => s.removeRecent);
   const opening = useApp((s) => s.opening);
+  const discard = useDiscardPrompt("open");
   const name = fileName(entry.path);
 
   return (
     <li className="recent-card">
-      <button type="button" className="recent-open" onClick={() => openPath(entry.path)} disabled={opening} title={entry.path}>
+      <button type="button" className="recent-open" onClick={() => openPath(entry.path, discard)} disabled={opening} title={entry.path}>
         <span className="thumb">
           <Thumbnail path={entry.path} />
         </span>
@@ -76,13 +77,14 @@ export function HomeView() {
   const opening = useApp((s) => s.opening);
   const pickAndOpen = useApp((s) => s.pickAndOpen);
   const clearRecent = useApp((s) => s.clearRecent);
+  const discard = useDiscardPrompt("open");
 
   return (
     <main className="home">
       <section className="hero">
         <h1>{t("home.title")}</h1>
         <p>{t("home.subtitle")}</p>
-        <button type="button" className="primary large" onClick={() => pickAndOpen(t("imageFiles"))} disabled={opening}>
+        <button type="button" className="primary large" onClick={() => pickAndOpen(t("imageFiles"), discard)} disabled={opening}>
           {opening ? t("opening") : t("openImage")}
         </button>
       </section>

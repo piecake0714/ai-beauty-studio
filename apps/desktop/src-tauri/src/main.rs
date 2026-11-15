@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use application_core::document::{Adjustments, EditState, History};
 use application_core::info::{self, FileInfo};
 use application_core::settings::{self, LanguagePreference, Settings, ThemePreference};
 use application_core::{EngineError, Source};
@@ -25,13 +26,20 @@ const THUMBNAIL_MAX_DIMENSION: u32 = 320;
 
 const NOTICES_FILE: &str = "THIRD_PARTY_NOTICES.txt";
 
+struct OpenDocument {
+    /// The original image at full resolution; never modified.
+    source: Arc<Source>,
+    /// Committed adjustments and their undo history.
+    history: History,
+}
+
 struct AppState {
     settings_path: PathBuf,
     settings: Mutex<Settings>,
     /// True when the settings file was damaged at startup and was reset.
     settings_recovered: bool,
-    /// The image open in the editor, kept at full resolution.
-    document: Mutex<Option<Arc<Source>>>,
+    /// The image open in the editor.
+    document: Mutex<Option<OpenDocument>>,
     /// Highest render request id seen; older requests are dropped unanswered.
     latest_render: AtomicU64,
 }
@@ -101,7 +109,10 @@ async fn open_image(path: String, state: State<'_, AppState>) -> Result<Response
     .await
     .map_err(|_| "internal".to_string())??;
 
-    *state.document.lock().map_err(|_| "internal".to_string())? = Some(Arc::new(source));
+    *state.document.lock().map_err(|_| "internal".to_string())? = Some(OpenDocument {
+        source: Arc::new(source),
+        history: History::default(),
+    });
     // The image opened; failing to save the recent list must not block it.
     let _ = state.update(|s| s.add_recent(&path, now_seconds()));
     Ok(Response::new(application_core::encode_frame(&overview)))
@@ -118,6 +129,11 @@ struct RenderRequest {
     height: f64,
     out_width: u32,
     out_height: u32,
+    /// The adjustments to show, which may be uncommitted while a slider is
+    /// being dragged.
+    adjustments: Adjustments,
+    /// Leftmost output columns shown without adjustments (before/after).
+    original_columns: u32,
 }
 
 /// Render the part of the open image that is on screen. Requests overtaken
@@ -136,21 +152,25 @@ async fn render_view(request: RenderRequest, state: State<'_, AppState>) -> Resu
         .document
         .lock()
         .map_err(|_| "internal".to_string())?
-        .clone()
+        .as_ref()
+        .map(|document| document.source.clone())
         .ok_or_else(|| "no_document".to_string())?;
 
     let latest = state.inner().latest_render.load(Ordering::SeqCst);
     if request.id < latest {
         return Err("superseded".to_string());
     }
+    let adjustments = request.adjustments.to_engine();
     let image = tauri::async_runtime::spawn_blocking(move || {
-        source.render(
+        source.render_adjusted(
             request.x,
             request.y,
             request.width,
             request.height,
             request.out_width,
             request.out_height,
+            Some(&adjustments),
+            request.original_columns,
         )
     })
     .await
@@ -161,6 +181,73 @@ async fn render_view(request: RenderRequest, state: State<'_, AppState>) -> Resu
         return Err("superseded".to_string());
     }
     Ok(Response::new(application_core::encode_frame(&image)))
+}
+
+/// Render the whole open image, with adjustments, at overview size. The
+/// canvas draws it under sharper renders, e.g. at the edges while panning.
+#[tauri::command]
+async fn render_overview(adjustments: Adjustments, state: State<'_, AppState>) -> Result<Response, String> {
+    let source = state
+        .document
+        .lock()
+        .map_err(|_| "internal".to_string())?
+        .as_ref()
+        .map(|document| document.source.clone())
+        .ok_or_else(|| "no_document".to_string())?;
+    let adjustments = adjustments.to_engine();
+    let image = tauri::async_runtime::spawn_blocking(move || {
+        let longer = source.width().max(source.height()).max(1);
+        let scale = (OVERVIEW_MAX_DIMENSION as f64 / longer as f64).min(1.0);
+        let out_w = ((source.width() as f64 * scale).round() as u32).max(1);
+        let out_h = ((source.height() as f64 * scale).round() as u32).max(1);
+        source.render_adjusted(
+            0.0,
+            0.0,
+            source.width() as f64,
+            source.height() as f64,
+            out_w,
+            out_h,
+            Some(&adjustments),
+            0,
+        )
+    })
+    .await
+    .map_err(|_| "internal".to_string())?
+    .map_err(engine_error_code)?;
+    Ok(Response::new(application_core::encode_frame(&image)))
+}
+
+/// Run `change` on the open document's history and report the result.
+fn with_history(state: &AppState, change: impl FnOnce(&mut History)) -> Result<EditState, String> {
+    let mut document = state.document.lock().map_err(|_| "internal".to_string())?;
+    let document = document.as_mut().ok_or_else(|| "no_document".to_string())?;
+    change(&mut document.history);
+    Ok(document.history.state())
+}
+
+#[tauri::command]
+fn edit_state(state: State<'_, AppState>) -> Result<EditState, String> {
+    with_history(&state, |_| {})
+}
+
+/// Record new adjustments as one undoable step.
+#[tauri::command]
+fn commit_adjustments(adjustments: Adjustments, state: State<'_, AppState>) -> Result<EditState, String> {
+    with_history(&state, |history| history.commit(adjustments))
+}
+
+#[tauri::command]
+fn undo(state: State<'_, AppState>) -> Result<EditState, String> {
+    with_history(&state, |history| {
+        history.undo();
+    })
+}
+
+#[tauri::command]
+fn redo(state: State<'_, AppState>) -> Result<EditState, String> {
+    with_history(&state, |history| {
+        history.redo();
+    })
 }
 
 /// Decode a small preview of a file for the recent-files list.
@@ -233,6 +320,11 @@ fn main() {
             get_settings,
             open_image,
             render_view,
+            render_overview,
+            edit_state,
+            commit_adjustments,
+            undo,
+            redo,
             thumbnail,
             file_info,
             set_theme,
