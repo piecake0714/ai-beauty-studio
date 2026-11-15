@@ -284,4 +284,79 @@ mod tests {
         assert_eq!(&frame[12..16], &48u32.to_le_bytes());
         assert_eq!(&frame[16..], &image.pixels[..]);
     }
+
+    /// Codes listed in the UI's error-code file (see error-codes.json).
+    pub(crate) fn listed_error_codes() -> Vec<String> {
+        let text = include_str!("../../../apps/desktop/src/error-codes.json");
+        let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        value["codes"].as_array().unwrap().iter().map(|c| c.as_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn every_error_code_of_the_core_has_a_message_in_the_ui() {
+        use crate::export::ExportError;
+        use crate::models::ModelError;
+        use crate::project::ProjectError;
+        let listed = listed_error_codes();
+        let io = || io::Error::other("x");
+        let codes = [
+            OpenError::NotFound.code(),
+            OpenError::ReadFailed(io()).code(),
+            OpenError::NotAnImage.code(),
+            OpenError::OutOfMemory.code(),
+            OpenError::Internal.code(),
+            ProjectError::NotFound.code(),
+            ProjectError::NotAProject.code(),
+            ProjectError::NewerVersion(2).code(),
+            ProjectError::Damaged(String::new()).code(),
+            ProjectError::OriginalMissing(String::new()).code(),
+            ProjectError::OriginalChanged(String::new()).code(),
+            ProjectError::Io(io()).code(),
+            ExportError::WouldOverwriteOriginal.code(),
+            ExportError::InvalidOptions.code(),
+            ExportError::EncodeFailed.code(),
+            ExportError::WriteFailed(io()).code(),
+            ModelError::RegistryUnreadable(String::new()).code(),
+            ModelError::UnknownModel(String::new()).code(),
+            ModelError::FileMissing(String::new()).code(),
+            ModelError::HashMismatch(String::new()).code(),
+            ModelError::LicenseMissing(String::new()).code(),
+            ModelError::LicenseNotApproved(String::new()).code(),
+        ];
+        for code in codes {
+            assert!(listed.iter().any(|c| c == code), "error code {code} is not in error-codes.json");
+        }
+        // Codes the core's jobs and analyses produce as text.
+        let sources = [
+            include_str!("ai.rs"),
+            include_str!("background.rs"),
+            include_str!("jobs.rs"),
+            include_str!("portrait.rs"),
+        ];
+        for code in sources.iter().flat_map(|text| quoted_codes(text)) {
+            assert!(listed.contains(&code), "error code {code} is not in error-codes.json");
+        }
+    }
+
+    /// Error codes written as `JobError::new("code"` or `"code".to_string()`.
+    pub(crate) fn quoted_codes(text: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        for (marker, before) in [("JobError::new(\"", true), ("\".to_string()", false)] {
+            let mut rest = text;
+            while let Some(at) = rest.find(marker) {
+                let code = if before {
+                    let tail = &rest[at + marker.len()..];
+                    tail.split('"').next().unwrap_or("")
+                } else {
+                    let head = &rest[..at];
+                    head.rsplit('"').next().unwrap_or("")
+                };
+                if !code.is_empty() && code.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+                    found.push(code.to_string());
+                }
+                rest = &rest[at + marker.len()..];
+            }
+        }
+        found
+    }
 }

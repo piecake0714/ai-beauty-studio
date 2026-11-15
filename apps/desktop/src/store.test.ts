@@ -81,6 +81,7 @@ function fakeApi(overrides: Partial<Api> = {}): Api {
       return projectPath as string;
     }),
     autosave: vi.fn(async () => undefined),
+    setTitle: vi.fn(async () => undefined),
     recoveryStatus: vi.fn(async () => null),
     restoreRecovery: vi.fn(async (original?: string | null) => {
       await openProjectLike("C:\\recovery.aibs", original ?? "C:\\照片\\a.jpg");
@@ -604,5 +605,20 @@ describe("app store", () => {
     expect(fileStem("C:\\照片\\my.photo.jpg")).toBe("my.photo");
     expect(fileStem("/home/a/b")).toBe("b");
     expect(documentKey({ edit: null, background: null, shape: null })).toContain("false");
+  });
+
+  it("opens the file the app was started with", async () => {
+    const api = fakeApi({
+      startup: vi.fn(async () => ({
+        settings: defaultSettings,
+        settingsRecovered: false,
+        version: "0.9.0",
+        launchPath: "C:\\work\\portrait.aibs",
+      })),
+    });
+    const store = createAppStore(api);
+    await store.getState().init();
+    expect(api.openProject).toHaveBeenCalledWith("C:\\work\\portrait.aibs", null);
+    expect(store.getState().view).toBe("editor");
   });
 });

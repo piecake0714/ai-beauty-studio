@@ -372,6 +372,8 @@ export function createAppStore(api: Api) {
             settingsRecovered: startup.settingsRecovered,
             recovery: await api.recoveryStatus().catch(() => null),
           });
+          // Started by double-clicking a project or image: open it.
+          if (startup.launchPath) await get().openPath(startup.launchPath);
         } catch (reason) {
           set({ ready: true, error: errorCode(reason) });
         }

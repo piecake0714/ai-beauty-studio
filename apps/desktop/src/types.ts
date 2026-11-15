@@ -55,6 +55,8 @@ export interface Startup {
   /** The settings file was damaged at startup and has been reset. */
   settingsRecovered: boolean;
   version: string;
+  /** A file the app was started with (for example a double-clicked project). */
+  launchPath?: string | null;
 }
 
 /** Number of HSL colour bands: red, orange, yellow, green, aqua, blue, purple, magenta. */

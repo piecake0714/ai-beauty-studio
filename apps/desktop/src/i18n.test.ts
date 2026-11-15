@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import errorCodes from "./error-codes.json";
 import { detectLanguage, errorMessage, tables } from "./i18n";
 
 describe("i18n", () => {
@@ -25,5 +26,14 @@ describe("i18n", () => {
       expect(errorMessage("en", code)).toBe(tables.en[`error.${code}` as keyof typeof tables.en]);
     }
     expect(errorMessage("zh-Hant", "something_new")).toBe(tables["zh-Hant"]["error.internal"]);
+  });
+
+  it("has a message in every language for every error code the core can send", () => {
+    expect(errorCodes.codes.length).toBeGreaterThan(20);
+    for (const table of Object.values(tables)) {
+      for (const code of errorCodes.codes) {
+        expect(Object.keys(table), `error.${code}`).toContain(`error.${code}`);
+      }
+    }
   });
 });

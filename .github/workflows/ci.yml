@@ -166,7 +166,7 @@ jobs:
         id: rust_test
         run: |
           set -o pipefail
-          cargo test --workspace 2>&1 | tee ci-logs/6-rust-test.txt
+          cargo test --workspace -- --show-output 2>&1 | tee ci-logs/6-rust-test.txt
 
       - name: Build installer
         id: installer

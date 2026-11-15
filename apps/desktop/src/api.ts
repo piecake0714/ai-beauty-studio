@@ -41,6 +41,8 @@ export interface Api {
   /** Save as a project, to `path` or to the open project; resolves to the path saved to. */
   saveProject(path: string | null): Promise<string>;
   autosave(): Promise<void>;
+  /** Set the window title. */
+  setTitle(title: string): Promise<void>;
   recoveryStatus(): Promise<RecoveryInfo | null>;
   restoreRecovery(original?: string | null): Promise<ArrayBuffer>;
   discardRecovery(): Promise<void>;
@@ -145,6 +147,7 @@ export const tauriApi: Api = {
   backgroundStatus: () => invoke("background_status"),
   saveProject: (path) => invoke("save_project", { path }),
   autosave: () => invoke("autosave"),
+  setTitle: (title) => getCurrentWindow().setTitle(title),
   recoveryStatus: () => invoke("recovery_status"),
   restoreRecovery: (original) => invoke("restore_recovery", { original: original ?? null }),
   discardRecovery: () => invoke("discard_recovery"),

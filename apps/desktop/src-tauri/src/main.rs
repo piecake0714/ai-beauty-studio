@@ -217,6 +217,8 @@ struct AppState {
     depth_model: Arc<ModelSlot>,
     /// Automatic recovery of unsaved work.
     recovery: Recovery,
+    /// The file given on the command line, until the UI asks for it.
+    launch_path: Mutex<Option<String>>,
 }
 
 impl AppState {
@@ -256,6 +258,8 @@ struct Startup {
     settings: Settings,
     settings_recovered: bool,
     version: String,
+    /// A file the app was started with (double-clicked project or image).
+    launch_path: Option<String>,
 }
 
 #[tauri::command]
@@ -265,12 +269,20 @@ fn startup(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<Startup,
         settings,
         settings_recovered: state.settings_recovered,
         version: app.package_info().version.to_string(),
+        // Handed out once, so reloading the UI does not open it again.
+        launch_path: state.launch_path.lock().map_err(|_| "internal".to_string())?.take(),
     })
 }
 
 #[tauri::command]
 fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
     Ok(state.settings.lock().map_err(|_| "internal".to_string())?.clone())
+}
+
+/// The file to open from the command line: the first argument that is not
+/// an option (Windows passes a double-clicked file as the first argument).
+fn launch_path_from(args: impl Iterator<Item = String>) -> Option<String> {
+    args.into_iter().find(|a| !a.starts_with('-') && !a.is_empty())
 }
 
 fn engine_error_code(error: EngineError) -> String {
@@ -582,13 +594,30 @@ fn export_image(path: String, options: ExportOptions, state: State<'_, AppState>
     Ok(state.jobs.start(move |ctx| {
         let (w, h) = (parts.inputs.source.width(), parts.inputs.source.height());
         let (out_w, out_h) = export::output_size(w, h, options.long_side);
-        ctx.progress(0.05, "render");
-        let image = parts
-            .inputs
-            .render(&parts.history.current(), 0.0, 0.0, w as f64, h as f64, out_w, out_h, 0)
-            .map_err(|e| JobError::new(&engine_error_code(e), "render"))?;
+        ctx.progress(0.02, "render");
+        // Rendered in strips so memory stays bounded for large photos.
+        let adjustments = parts.history.current();
+        let image = export::render_in_strips(
+            w,
+            h,
+            out_w,
+            out_h,
+            export::STRIP_ROWS,
+            export::strip_overlap(out_w, out_h),
+            |x, y, rw, rh, ow, oh| {
+                parts
+                    .inputs
+                    .render(&adjustments, x, y, rw, rh, ow, oh, 0)
+                    .map_err(|e| JobError::new(&engine_error_code(e), "render"))
+            },
+            |done| {
+                ctx.check()?;
+                ctx.progress(0.02 + 0.68 * done, "render");
+                Ok(())
+            },
+        )?;
         ctx.check()?;
-        ctx.progress(0.6, "encode");
+        ctx.progress(0.75, "encode");
         let bytes = export::encode(&image, &options).map_err(|e| JobError::new(e.code(), e.to_string()))?;
         ctx.check()?;
         ctx.progress(0.9, "write");
@@ -936,8 +965,8 @@ fn third_party_notices(app: tauri::AppHandle) -> Result<String, String> {
     let path = app
         .path()
         .resolve(NOTICES_FILE, BaseDirectory::Resource)
-        .map_err(|_| "not_found".to_string())?;
-    std::fs::read_to_string(path).map_err(|_| "not_found".to_string())
+        .map_err(|_| "notices_missing".to_string())?;
+    std::fs::read_to_string(path).map_err(|_| "notices_missing".to_string())
 }
 
 fn main() {
@@ -965,6 +994,7 @@ fn main() {
                 background_model: Arc::new(ModelSlot::new(separation::BACKGROUND_MODEL)),
                 depth_model: Arc::new(ModelSlot::new(separation::DEPTH_MODEL)),
                 recovery,
+                launch_path: Mutex::new(launch_path_from(std::env::args().skip(1))),
             });
             Ok(())
         })
@@ -1014,4 +1044,45 @@ fn main() {
                 app.state::<AppState>().recovery.discard();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn launch_path_is_the_first_non_option_argument() {
+        let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter();
+        assert_eq!(super::launch_path_from(args(&[])), None);
+        assert_eq!(super::launch_path_from(args(&["C:\\作品\\a.aibs"])), Some("C:\\作品\\a.aibs".to_string()));
+        assert_eq!(super::launch_path_from(args(&["--flag", "D:\\b.jpg"])), Some("D:\\b.jpg".to_string()));
+    }
+
+    /// Every error code this file sends to the UI must be in the UI's list,
+    /// which has a message for each in every language.
+    #[test]
+    fn every_error_code_sent_to_the_ui_has_a_message() {
+        let listed: serde_json::Value = serde_json::from_str(include_str!("../../src/error-codes.json")).unwrap();
+        let listed: Vec<&str> = listed["codes"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
+        let source = include_str!("main.rs");
+        // The test itself is not part of what the app sends.
+        let source = &source[..source.find("#[cfg(test)]").unwrap()];
+        let mut found = Vec::new();
+        for marker in ["JobError::new(\"", "Err(\"", "EngineError::OutOfMemory => \"", "EngineError::InvalidArgument => \""] {
+            let mut rest = source;
+            while let Some(at) = rest.find(marker) {
+                rest = &rest[at + marker.len()..];
+                found.push(rest.split('"').next().unwrap_or("").to_string());
+            }
+        }
+        let mut rest = source;
+        while let Some(at) = rest.find("\".to_string()") {
+            found.push(rest[..at].rsplit('"').next().unwrap_or("").to_string());
+            rest = &rest[at + 1..];
+        }
+        let found: Vec<String> =
+            found.into_iter().filter(|c| !c.is_empty() && c.chars().all(|ch| ch.is_ascii_lowercase() || ch == '_')).collect();
+        assert!(found.len() > 20, "the scan found the codes");
+        for code in found {
+            assert!(listed.contains(&code.as_str()), "error code {code} is not in error-codes.json");
+        }
+    }
 }

@@ -221,6 +221,10 @@ const zhHant = {
   "recovery.message": "上次程式沒有正常關閉。{name} 的編輯在 {time} 自動暫存過。",
   "recovery.restore": "還原",
   "recovery.discard": "捨棄",
+  "error.cancelled": "已取消。",
+  "error.invalid_request": "要求的內容不正確，請重試。",
+  "error.no_document": "目前沒有開啟的影像。",
+  "error.superseded": "已改為處理較新的要求。",
   "error.internal": "發生內部錯誤。",
 };
 
@@ -438,6 +442,10 @@ const en: Record<keyof typeof zhHant, string> = {
   "recovery.message": "The app did not close normally last time. Edits to {name} were saved automatically at {time}.",
   "recovery.restore": "Restore",
   "recovery.discard": "Discard",
+  "error.cancelled": "Cancelled.",
+  "error.invalid_request": "The request was not valid. Please try again.",
+  "error.no_document": "No image is open.",
+  "error.superseded": "A newer request replaced this one.",
   "error.internal": "An internal error occurred.",
 };
 

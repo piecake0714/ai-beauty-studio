@@ -8,7 +8,7 @@ import { TopBar } from "./components/TopBar";
 import { useApp, useDiscardPrompt, useFileLabels, useI18n } from "./context";
 import { resolveTheme } from "./format";
 import { errorMessage } from "./i18n";
-import { documentKey } from "./store";
+import { documentKey, fileStem } from "./store";
 
 /** How long after the last change unsaved work is saved for recovery. */
 const AUTOSAVE_DELAY_MS = 15_000;
@@ -169,6 +169,14 @@ export function App() {
     setHoldOriginal,
     openPrompt,
   ]);
+
+  // Window title: the open file, marked when there are unsaved changes.
+  const title = useApp((s) => (s.document ? fileStem(s.projectPath ?? s.document.path) : null));
+  const dirty = dirtyKey !== null;
+  useEffect(() => {
+    const appName = t("appName");
+    void api.setTitle(title ? `${title}${dirty ? " ●" : ""} — ${appName}` : appName).catch(() => undefined);
+  }, [api, title, dirty, t]);
 
   // Automatic recovery: unsaved changes are saved in the background a
   // little after the last change.

@@ -41,23 +41,30 @@ double blur_sigma(const aibs_background& background, int source_width, int sourc
     return strength * kMaxBlurFraction * std::max(source_width, source_height) * scale;
 }
 
-// Gaussian blur that stays fast for large sigma: blur a reduced copy.
-cv::Mat wide_blur(const cv::Mat& image, double sigma) {
+// Gaussian blur that stays fast for large sigma: blur a copy reduced by a
+// whole factor k. The reduction grid is anchored to absolute output pixel
+// positions (origin = position of image(0, 0)), so neighbouring renders of
+// one image (screen tiles, export strips) blur identically and meet without
+// seams.
+cv::Mat wide_blur(const cv::Mat& image, double sigma, int origin_x, int origin_y) {
     cv::Mat out;
     if (sigma < 0.5) return image.clone();
-    const double factor = std::max(1.0, sigma / 6.0);
-    if (factor <= 1.0) {
+    const int k = std::max(1, static_cast<int>(std::floor(sigma / 6.0)));
+    if (k == 1) {
         cv::GaussianBlur(image, out, cv::Size(0, 0), sigma, sigma, cv::BORDER_REFLECT);
         return out;
     }
+    const auto mod = [k](int v) { return ((v % k) + k) % k; };
+    const int left = mod(origin_x), top = mod(origin_y);
+    const int right = (k - (image.cols + left) % k) % k;
+    const int bottom = (k - (image.rows + top) % k) % k;
+    cv::Mat padded;
+    cv::copyMakeBorder(image, padded, top, bottom, left, right, cv::BORDER_REFLECT);
     cv::Mat small;
-    cv::resize(image, small,
-               cv::Size(std::max(1, static_cast<int>(std::lround(image.cols / factor))),
-                        std::max(1, static_cast<int>(std::lround(image.rows / factor)))),
-               0, 0, cv::INTER_AREA);
-    cv::GaussianBlur(small, small, cv::Size(0, 0), sigma / factor, sigma / factor, cv::BORDER_REFLECT);
-    cv::resize(small, out, image.size(), 0, 0, cv::INTER_LINEAR);
-    return out;
+    cv::resize(padded, small, cv::Size(padded.cols / k, padded.rows / k), 0, 0, cv::INTER_AREA);
+    cv::GaussianBlur(small, small, cv::Size(0, 0), sigma / k, sigma / k, cv::BORDER_REFLECT);
+    cv::resize(small, out, padded.size(), 0, 0, cv::INTER_LINEAR);
+    return out(cv::Rect(left, top, image.cols, image.rows)).clone();
 }
 
 cv::Mat box(const cv::Mat& m, int radius) {
@@ -200,9 +207,11 @@ int32_t composite_background(cv::Mat& bgr, int first_col, double x, double y, do
             bgr.convertTo(image, CV_32FC3);
             cv::Mat weight3;
             cv::merge(std::vector<cv::Mat>{weight, weight, weight}, weight3);
-            const cv::Mat numerator = wide_blur(image.mul(weight3), sigma);
-            const cv::Mat denominator = wide_blur(weight, sigma);
-            const cv::Mat plain = wide_blur(image, sigma);
+            const int origin_x = static_cast<int>(std::lround(x * scale_x));
+            const int origin_y = static_cast<int>(std::lround(y * scale_y));
+            const cv::Mat numerator = wide_blur(image.mul(weight3), sigma, origin_x, origin_y);
+            const cv::Mat denominator = wide_blur(weight, sigma, origin_x, origin_y);
+            const cv::Mat plain = wide_blur(image, sigma, origin_x, origin_y);
             cv::Mat result(bgr.size(), CV_8UC3);
             for (int row = 0; row < bgr.rows; ++row) {
                 const cv::Vec3f* n = numerator.ptr<cv::Vec3f>(row);
