@@ -681,7 +681,7 @@ mod tests {
     fn removal_fills_the_painted_object_from_its_surroundings() {
         let (source, _, w, h) = scene();
         let source = Arc::new(source);
-        let slot = Arc::new(ModelSlot::new(INPAINT_MODEL));
+        let slot = Arc::new(ModelSlot::cpu_only(INPAINT_MODEL));
         let (tx, rx) = mpsc::channel();
         let tx = Mutex::new(tx);
         let jobs = Jobs::new(move |u| tx.lock().unwrap().send(u).unwrap());
@@ -703,6 +703,8 @@ mod tests {
         wait(&rx);
         let patch = result.lock().unwrap().take().unwrap();
         assert_eq!(patch.model.as_ref().unwrap().id, INPAINT_MODEL);
+        // LaMa always runs on the CPU (DirectML returns the picture unchanged).
+        assert_eq!(slot.loaded_provider(), Some(engine_sys::Provider::Cpu));
         let engine_patch = patch.to_engine().unwrap();
         let patches = [&engine_patch];
         let portrait = engine_sys::Portrait { patches: &patches, ..Default::default() };
@@ -741,7 +743,7 @@ mod tests {
             .collect();
         let png = engine_sys::encode(&rgb, w, h, 3, engine_sys::ImageFormat::Png).unwrap();
         let source = Arc::new(Source::open(&png).unwrap());
-        let slot = Arc::new(ModelSlot::new(INPAINT_MODEL));
+        let slot = Arc::new(ModelSlot::cpu_only(INPAINT_MODEL));
         let (tx, rx) = mpsc::channel();
         let tx = Mutex::new(tx);
         let jobs = Jobs::new(move |u| tx.lock().unwrap().send(u).unwrap());
@@ -774,7 +776,7 @@ mod tests {
     fn expansion_continues_the_photo_beyond_its_edges() {
         let png = include_bytes!("../../../tests/fixtures/gradient_64x48.png");
         let source = Arc::new(Source::open(png).unwrap());
-        let slot = Arc::new(ModelSlot::new(INPAINT_MODEL));
+        let slot = Arc::new(ModelSlot::cpu_only(INPAINT_MODEL));
         let (tx, rx) = mpsc::channel();
         let tx = Mutex::new(tx);
         let jobs = Jobs::new(move |u| tx.lock().unwrap().send(u).unwrap());

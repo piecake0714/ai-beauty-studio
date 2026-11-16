@@ -23,11 +23,20 @@ pub const DEPTH_MODEL: &str = "depth-anything-v2-small";
 pub struct ModelSlot {
     id: &'static str,
     session: Mutex<Option<(Arc<AiSession>, ModelRef)>>,
+    /// Never use the GPU for this model.
+    cpu_only: bool,
 }
 
 impl ModelSlot {
     pub fn new(id: &'static str) -> ModelSlot {
-        ModelSlot { id, session: Mutex::new(None) }
+        ModelSlot { id, session: Mutex::new(None), cpu_only: false }
+    }
+
+    /// A slot whose model always runs on the CPU: for models the GPU path
+    /// runs without an error but gives wrong results (LaMa's Fourier
+    /// layers under DirectML return the picture unchanged).
+    pub fn cpu_only(id: &'static str) -> ModelSlot {
+        ModelSlot { id, session: Mutex::new(None), cpu_only: true }
     }
 
     pub fn id(&self) -> &'static str {
@@ -99,7 +108,8 @@ pub(crate) fn run_reporting<T>(
     if report {
         ctx.progress(0.05, "load");
     }
-    let (session, model) = slot.get(registry, Provider::DirectMl)?;
+    let first = if slot.cpu_only { Provider::Cpu } else { Provider::DirectMl };
+    let (session, model) = slot.get(registry, first)?;
     ctx.check()?;
     if report {
         ctx.progress(0.3, "run");
