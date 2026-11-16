@@ -1,0 +1,305 @@
+[1m[92m   Compiling[0m engine-sys v2.0.1 (D:\a\ai-beauty-studio\ai-beauty-studio\crates\engine-sys)
+[1m[92m   Compiling[0m ai-beauty-studio v2.0.1 (D:\a\ai-beauty-studio\ai-beauty-studio\apps\desktop\src-tauri)
+[1m[92m   Compiling[0m application-core v2.0.1 (D:\a\ai-beauty-studio\ai-beauty-studio\crates\application-core)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 9.82s
+[1m[92m     Running[0m unittests src\main.rs (target\debug\build\ai-beauty-studio/2abff40c6d17af63\out\ai_beauty_studio-2abff40c6d17af63.exe)
+
+running 2 tests
+test tests::launch_path_is_the_first_non_option_argument ... ok
+test tests::every_error_code_sent_to_the_ui_has_a_message ... ok
+
+successes:
+
+successes:
+    tests::every_error_code_sent_to_the_ui_has_a_message
+    tests::launch_path_is_the_first_non_option_argument
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+[1m[92m     Running[0m unittests src\lib.rs (target\debug\build\application-core/0bb2e8ad723e2613\out\application_core-0bb2e8ad723e2613.exe)
+
+running 91 tests
+test ai::tests::hardware_lists_gpus_on_windows ... ok
+test batch::tests::photo_specific_edits_are_left_out ... ok
+test document::tests::a_new_change_after_undo_discards_the_redo_steps ... ok
+test document::tests::background_for_the_engine_only_when_something_changes ... ok
+test document::tests::background_settings_round_trip_and_clamp ... ok
+test document::tests::committing_the_same_values_adds_no_step ... ok
+test document::tests::crops_stay_inside_the_photo_in_whole_pixels ... ok
+test document::tests::curves_grading_and_lut_are_cleaned_and_make_a_look ... ok
+test document::tests::edited_reflects_the_current_values ... ok
+test document::tests::history_is_capped ... ok
+test document::tests::history_round_trips_through_its_parts_and_repairs_bad_input ... ok
+test document::tests::json_uses_the_names_the_ui_expects ... ok
+test document::tests::layers_round_trip_are_clamped_and_prepared_for_the_engine ... ok
+test document::tests::light_settings_reach_the_engine_only_when_on ... ok
+test document::tests::older_data_without_new_fields_still_loads ... ok
+test document::tests::one_click_values_replace_colour_but_keep_retouching ... ok
+test document::tests::portrait_tools_and_spots_are_kept_in_range ... ok
+test document::tests::skin_smoothing_is_kept_in_range_and_out_of_the_colour_pipeline ... ok
+test document::tests::starts_unedited_with_nothing_to_undo ... ok
+test document::tests::undo_and_redo_restore_exact_values ... ok
+test document::tests::values_are_clamped_and_non_numbers_ignored ... ok
+test batch::tests::a_batch_edits_every_photo_and_reports_failures ... ok
+test export::tests::jpeg_places_transparency_on_white_and_png_keeps_it ... ok
+test export::tests::never_overwrites_the_original ... ok
+test export::tests::sizes_are_reduced_but_never_enlarged ... ok
+test export::tests::strips_can_be_stopped ... ok
+test ai::tests::self_test_passes_and_reports_progress ... ok
+test export::tests::strips_of_a_cropped_region_match_a_whole_render_of_it ... ok
+test files::tests::atomic_write_replaces_and_leaves_no_partial_file ... ok
+test files::tests::file_refs_find_moved_folders_and_notice_changed_files ... ok
+test files::tests::relative_paths ... ok
+test info::tests::detects_every_supported_format_from_its_signature ... ok
+test info::tests::missing_file_is_an_error ... ok
+test info::tests::raw_files_are_named_by_their_extension ... ok
+test info::tests::serializes_format_names_for_display ... ok
+test info::tests::unknown_or_short_data_is_not_a_format ... ok
+test inpaint::tests::context_stays_inside_the_photo_and_is_square_when_it_can_be ... ok
+test inpaint::tests::dust_and_scratches_are_found_but_not_smooth_shading ... ok
+test export::tests::strips_match_a_whole_render_with_every_effect ... ok
+test export::tests::export_timing_12_megapixels ... ok
+test inpaint::tests::painted_strokes_become_a_hole_and_eraser_takes_it_back ... ok
+test inpaint::tests::patches_cover_only_the_hole_with_a_soft_edge ... ok
+test inpaint::tests::expansion_continues_the_photo_beyond_its_edges ... ok
+test jobs::tests::a_cancelled_job_stops_at_its_next_check ... ok
+test jobs::tests::failures_carry_their_code ... ok
+test jobs::tests::ids_are_unique_and_unknown_ids_cannot_be_cancelled ... ok
+test jobs::tests::reports_progress_then_the_result ... ok
+test jobs::tests::updates_serialize_for_the_ui ... ok
+test looks::tests::builtin_presets_are_valid_luts ... ok
+test looks::tests::cube_files_are_read_with_their_domain ... ok
+test looks::tests::the_library_imports_lists_and_loads ... ok
+test models::tests::a_changed_model_file_is_refused ... ok
+test models::tests::a_model_without_an_approved_license_is_refused ... ok
+test models::tests::an_unreadable_registry_is_reported ... ok
+test models::tests::hashes_are_lowercase_hex ... ok
+test inpaint::tests::old_photo_repair_fills_specks_and_suggests_values ... ok
+test models::tests::missing_files_unknown_ids_and_escaping_paths_are_refused ... ok
+test background::tests::separation_runs_as_a_job_through_the_registry_and_reuses_the_model ... ok
+test portrait::tests::status_json_matches_the_ui ... ok
+test portrait::tests::the_shipped_face_model_loads_and_finds_no_faces_in_a_gradient ... ok
+test project::tests::finds_a_moved_original_or_asks_for_it ... ok
+test project::tests::format_1_projects_are_migrated ... ok
+test project::tests::missing_background_images_do_not_stop_loading ... ok
+test project::tests::refuses_other_files_newer_versions_and_damage ... ok
+test project::tests::saves_and_restores_everything ... ok
+test recovery::tests::saves_offers_and_discards ... ok
+test settings::tests::damaged_file_is_moved_aside_and_defaults_are_used ... ok
+test settings::tests::json_uses_the_names_the_ui_expects ... ok
+test settings::tests::missing_file_gives_defaults ... ok
+test settings::tests::recent_list_is_capped ... ok
+test settings::tests::recent_list_moves_reopened_files_to_the_top ... ok
+test settings::tests::remove_and_clear_recent ... ok
+test settings::tests::save_then_load_round_trips ... ok
+test settings::tests::unknown_and_missing_fields_are_tolerated ... ok
+test tests::corrupted_file_gives_a_clear_error ... ok
+test tests::empty_file_gives_a_clear_error ... ok
+test tests::every_error_code_of_the_core_has_a_message_in_the_ui ... ok
+test tests::frame_has_header_then_pixels ... ok
+test tests::lossless_formats_decode_to_identical_pixels ... ok
+test tests::missing_file_gives_not_found ... ok
+test tests::opening_never_modifies_the_original ... ok
+test tests::opens_a_document_at_full_resolution ... ok
+test tests::opens_every_supported_format ... ok
+test tests::opens_image_from_a_chinese_path ... ok
+test tests::undoing_200_edits_restores_the_exact_original_render ... ok
+test upscale::tests::limits_are_checked ... ok
+test inpaint::tests::removal_fills_the_painted_object_from_its_surroundings ... ok
+test upscale::tests::tiles_join_without_seams ... ok
+test models::tests::inspection_lists_licenses_and_problems_and_verify_checks_hashes ... ok
+test upscale::tests::the_model_enlarges_a_photo_like_a_smooth_resize ... ok
+test models::tests::the_shipped_registry_loads_and_its_models_verify ... ok
+
+successes:
+
+---- ai::tests::self_test_passes_and_reports_progress stdout ----
+self-test: {"fallbackReason":"DirectML unavailable: E:\\_work\\1\\s\\onnxruntime\\core\\providers\\dml\\dml_provider_factory.cc(520)\\onnxruntime.dll!00007FFB3875B160: (caller: 00007FFB3875B46A) Exception(1) tid(14bc) C0262002 Specified display adapter handle is invalid.\r\n","firstRunMs":1.9128,"height":256,"maxError":8.4090232777001e-8,"model":"test-luma v1","passed":true,"provider":"cpu","runMs":0.5805,"width":256}
+
+---- export::tests::strips_match_a_whole_render_with_every_effect stdout ----
+strips vs whole render: largest difference 0, 0 values differ
+
+---- export::tests::export_timing_12_megapixels stdout ----
+info: 12 MP export with every effect on CPU: render 18.3 s, total with JPEG 22.8 s, 2189946 bytes
+
+---- inpaint::tests::expansion_continues_the_photo_beyond_its_edges stdout ----
+expand: photo mean [126, 118, 128], border mean [116, 121, 143]
+
+---- inpaint::tests::old_photo_repair_fills_specks_and_suggests_values stdout ----
+repair: speck 162, scratch 139
+
+---- inpaint::tests::removal_fills_the_painted_object_from_its_surroundings stdout ----
+removal: object mean 15 -> 143
+
+---- upscale::tests::the_model_enlarges_a_photo_like_a_smooth_resize stdout ----
+upscale: PSNR against a plain resize 33.5 dB
+
+
+successes:
+    ai::tests::hardware_lists_gpus_on_windows
+    ai::tests::self_test_passes_and_reports_progress
+    background::tests::separation_runs_as_a_job_through_the_registry_and_reuses_the_model
+    batch::tests::a_batch_edits_every_photo_and_reports_failures
+    batch::tests::photo_specific_edits_are_left_out
+    document::tests::a_new_change_after_undo_discards_the_redo_steps
+    document::tests::background_for_the_engine_only_when_something_changes
+    document::tests::background_settings_round_trip_and_clamp
+    document::tests::committing_the_same_values_adds_no_step
+    document::tests::crops_stay_inside_the_photo_in_whole_pixels
+    document::tests::curves_grading_and_lut_are_cleaned_and_make_a_look
+    document::tests::edited_reflects_the_current_values
+    document::tests::history_is_capped
+    document::tests::history_round_trips_through_its_parts_and_repairs_bad_input
+    document::tests::json_uses_the_names_the_ui_expects
+    document::tests::layers_round_trip_are_clamped_and_prepared_for_the_engine
+    document::tests::light_settings_reach_the_engine_only_when_on
+    document::tests::older_data_without_new_fields_still_loads
+    document::tests::one_click_values_replace_colour_but_keep_retouching
+    document::tests::portrait_tools_and_spots_are_kept_in_range
+    document::tests::skin_smoothing_is_kept_in_range_and_out_of_the_colour_pipeline
+    document::tests::starts_unedited_with_nothing_to_undo
+    document::tests::undo_and_redo_restore_exact_values
+    document::tests::values_are_clamped_and_non_numbers_ignored
+    export::tests::export_timing_12_megapixels
+    export::tests::jpeg_places_transparency_on_white_and_png_keeps_it
+    export::tests::never_overwrites_the_original
+    export::tests::sizes_are_reduced_but_never_enlarged
+    export::tests::strips_can_be_stopped
+    export::tests::strips_match_a_whole_render_with_every_effect
+    export::tests::strips_of_a_cropped_region_match_a_whole_render_of_it
+    files::tests::atomic_write_replaces_and_leaves_no_partial_file
+    files::tests::file_refs_find_moved_folders_and_notice_changed_files
+    files::tests::relative_paths
+    info::tests::detects_every_supported_format_from_its_signature
+    info::tests::missing_file_is_an_error
+    info::tests::raw_files_are_named_by_their_extension
+    info::tests::serializes_format_names_for_display
+    info::tests::unknown_or_short_data_is_not_a_format
+    inpaint::tests::context_stays_inside_the_photo_and_is_square_when_it_can_be
+    inpaint::tests::dust_and_scratches_are_found_but_not_smooth_shading
+    inpaint::tests::expansion_continues_the_photo_beyond_its_edges
+    inpaint::tests::old_photo_repair_fills_specks_and_suggests_values
+    inpaint::tests::painted_strokes_become_a_hole_and_eraser_takes_it_back
+    inpaint::tests::patches_cover_only_the_hole_with_a_soft_edge
+    inpaint::tests::removal_fills_the_painted_object_from_its_surroundings
+    jobs::tests::a_cancelled_job_stops_at_its_next_check
+    jobs::tests::failures_carry_their_code
+    jobs::tests::ids_are_unique_and_unknown_ids_cannot_be_cancelled
+    jobs::tests::reports_progress_then_the_result
+    jobs::tests::updates_serialize_for_the_ui
+    looks::tests::builtin_presets_are_valid_luts
+    looks::tests::cube_files_are_read_with_their_domain
+    looks::tests::the_library_imports_lists_and_loads
+    models::tests::a_changed_model_file_is_refused
+    models::tests::a_model_without_an_approved_license_is_refused
+    models::tests::an_unreadable_registry_is_reported
+    models::tests::hashes_are_lowercase_hex
+    models::tests::inspection_lists_licenses_and_problems_and_verify_checks_hashes
+    models::tests::missing_files_unknown_ids_and_escaping_paths_are_refused
+    models::tests::the_shipped_registry_loads_and_its_models_verify
+    portrait::tests::status_json_matches_the_ui
+    portrait::tests::the_shipped_face_model_loads_and_finds_no_faces_in_a_gradient
+    project::tests::finds_a_moved_original_or_asks_for_it
+    project::tests::format_1_projects_are_migrated
+    project::tests::missing_background_images_do_not_stop_loading
+    project::tests::refuses_other_files_newer_versions_and_damage
+    project::tests::saves_and_restores_everything
+    recovery::tests::saves_offers_and_discards
+    settings::tests::damaged_file_is_moved_aside_and_defaults_are_used
+    settings::tests::json_uses_the_names_the_ui_expects
+    settings::tests::missing_file_gives_defaults
+    settings::tests::recent_list_is_capped
+    settings::tests::recent_list_moves_reopened_files_to_the_top
+    settings::tests::remove_and_clear_recent
+    settings::tests::save_then_load_round_trips
+    settings::tests::unknown_and_missing_fields_are_tolerated
+    tests::corrupted_file_gives_a_clear_error
+    tests::empty_file_gives_a_clear_error
+    tests::every_error_code_of_the_core_has_a_message_in_the_ui
+    tests::frame_has_header_then_pixels
+    tests::lossless_formats_decode_to_identical_pixels
+    tests::missing_file_gives_not_found
+    tests::opening_never_modifies_the_original
+    tests::opens_a_document_at_full_resolution
+    tests::opens_every_supported_format
+    tests::opens_image_from_a_chinese_path
+    tests::undoing_200_edits_restores_the_exact_original_render
+    upscale::tests::limits_are_checked
+    upscale::tests::the_model_enlarges_a_photo_like_a_smooth_resize
+    upscale::tests::tiles_join_without_seams
+
+test result: ok. 91 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 61.12s
+
+[1m[92m     Running[0m unittests src\lib.rs (target\debug\build\engine-sys/b3b23007ad41b080\out\engine_sys-b3b23007ad41b080.exe)
+
+running 21 tests
+test tests::decodes_png_with_exact_pixels ... ok
+test tests::auto_adjust_suggests_slider_values ... ok
+test tests::downscales_to_max_dimension ... ok
+test tests::encodes_and_round_trips_analysis_results ... ok
+test tests::adjustments_match_adjust_rgb8_and_respect_the_split ... ok
+test tests::background_colour_replaces_only_the_background ... ok
+test tests::layers_with_strokes_render ... ok
+test tests::looks_render_like_apply_rgb8_and_luts_check_their_size ... ok
+test tests::light_brightens_near_it_and_follows_a_shape ... ok
+test tests::rejects_corrupted_data ... ok
+test tests::portrait_without_faces_changes_nothing ... ok
+test tests::rejects_empty_input ... ok
+test tests::reports_a_version ... ok
+test tests::reports_gpus_and_runtime_version ... ok
+test tests::source_can_be_shared_between_threads ... ok
+test tests::source_fit_keeps_aspect_ratio_and_never_enlarges ... ok
+test tests::source_rejects_bad_input ... ok
+test tests::source_renders_regions ... ok
+[1;31m2026-11-16 02:13:16.3053397 [E:onnxruntime:, sequential_executor.cc:572 onnxruntime::ExecuteKernel] Non-zero status code returned while running Conv node. Name:'luma_nchwc' Status Message: Input channels C is not equal to kernel channels * group. C: 1 kernel channels: 3 group: 1[m
+test tests::rejects_broken_models_and_mismatched_input ... ok
+test tests::runs_the_test_model_on_cpu_and_preferred_gpu ... ok
+test tests::detect_faces_finds_none_in_a_gradient ... ok
+
+successes:
+
+successes:
+    tests::adjustments_match_adjust_rgb8_and_respect_the_split
+    tests::auto_adjust_suggests_slider_values
+    tests::background_colour_replaces_only_the_background
+    tests::decodes_png_with_exact_pixels
+    tests::detect_faces_finds_none_in_a_gradient
+    tests::downscales_to_max_dimension
+    tests::encodes_and_round_trips_analysis_results
+    tests::layers_with_strokes_render
+    tests::light_brightens_near_it_and_follows_a_shape
+    tests::looks_render_like_apply_rgb8_and_luts_check_their_size
+    tests::portrait_without_faces_changes_nothing
+    tests::rejects_broken_models_and_mismatched_input
+    tests::rejects_corrupted_data
+    tests::rejects_empty_input
+    tests::reports_a_version
+    tests::reports_gpus_and_runtime_version
+    tests::runs_the_test_model_on_cpu_and_preferred_gpu
+    tests::source_can_be_shared_between_threads
+    tests::source_fit_keeps_aspect_ratio_and_never_enlarges
+    tests::source_rejects_bad_input
+    tests::source_renders_regions
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+[1m[92m   Doc-tests[0m application_core
+
+running 0 tests
+
+successes:
+
+successes:
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+[1m[92m   Doc-tests[0m engine_sys
+
+running 0 tests
+
+successes:
+
+successes:
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

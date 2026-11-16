@@ -1,0 +1,106 @@
+Detecting compiler hash for triplet x64-windows...
+Compiler found: C:/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe
+Detecting compiler hash for triplet x64-windows-static-md...
+Compiler found: C:/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe
+The following packages will be built and installed:
+  * jasper:x64-windows-static-md@4.2.9
+  * lcms:x64-windows-static-md@2.19.1#1
+  * libjpeg-turbo:x64-windows-static-md@3.2.0#1
+  * liblzma:x64-windows-static-md@5.8.4
+  * libpng:x64-windows-static-md@1.6.59
+    libraw:x64-windows-static-md@0.22.3
+  * libspng:x64-windows-static-md@0.7.4#1
+  * libwebp[core,libwebpmux,nearlossless,simd,unicode]:x64-windows-static-md@1.6.0#3
+    opencv4[core,jpeg,png,tiff,webp]:x64-windows-static-md@4.14.0
+  * tiff[core,jpeg,lzma,zip]:x64-windows-static-md@4.7.2
+  * vcpkg-cmake:x64-windows@2025-08-07
+  * vcpkg-cmake-config:x64-windows@2026-07-21
+  * vcpkg-cmake-get-vars:x64-windows@2025-05-29
+  * vcpkg-get-python-packages:x64-windows@2025-04-05#1
+  * vcpkg-tool-meson:x64-windows@1.12.1
+  * zlib:x64-windows-static-md@1.3.2#2
+Additional packages (*) will be modified to complete this operation.
+Restored 16 package(s) from D:\a\ai-beauty-studio\ai-beauty-studio\.vcpkg-cache in 3.1 s. Use --debug to see more details.
+Installing 1/16 vcpkg-cmake-config:x64-windows@2026-07-21...
+vcpkg-cmake-config:x64-windows@2026-07-21 package ABI: 5592a6f199bb57aea95960fea4ea62c2124bb1e109791c80816ad78bb2df2e93
+Elapsed time to handle vcpkg-cmake-config:x64-windows: 3.67 ms
+Installing 2/16 vcpkg-cmake:x64-windows@2025-08-07...
+vcpkg-cmake:x64-windows@2025-08-07 package ABI: e9a0c24366a79f6fd410f51d50cbc8e9637534b6fbc393576a1865036e35e703
+Elapsed time to handle vcpkg-cmake:x64-windows: 3.47 ms
+Installing 3/16 zlib:x64-windows-static-md@1.3.2#2...
+zlib:x64-windows-static-md@1.3.2#2 package ABI: e363a1087500f36e61adcc5e3614d522fe447658221f99e4f6cdd47c7e5a8055
+Elapsed time to handle zlib:x64-windows-static-md: 7.72 ms
+Installing 4/16 vcpkg-cmake-get-vars:x64-windows@2025-05-29...
+vcpkg-cmake-get-vars:x64-windows@2025-05-29 package ABI: 39a2dc551afddfb9fabf96e4e62b286863c89286c56f47def43a7ec34063243f
+Elapsed time to handle vcpkg-cmake-get-vars:x64-windows: 3.3 ms
+Installing 5/16 vcpkg-tool-meson:x64-windows@1.12.1...
+vcpkg-tool-meson:x64-windows@1.12.1 package ABI: 0a0b3aba356f75b0a7a284265be1173115d20d53577c5dc054ab52af34f9c315
+Elapsed time to handle vcpkg-tool-meson:x64-windows: 5.37 ms
+Installing 6/16 lcms:x64-windows-static-md@2.19.1#1...
+lcms:x64-windows-static-md@2.19.1#1 package ABI: bbf4aef64a14f190978a5f081a5b266377db6a548a915c4b3c1978791f3a7608
+Elapsed time to handle lcms:x64-windows-static-md: 5.55 ms
+Installing 7/16 libspng:x64-windows-static-md@0.7.4#1...
+libspng:x64-windows-static-md@0.7.4#1 package ABI: 39205b51c60dd71e970b2610d1f5f03f6b0a4a0a7071d2c860788c39abc2bb9f
+Elapsed time to handle libspng:x64-windows-static-md: 4.9 ms
+Installing 8/16 libjpeg-turbo:x64-windows-static-md@3.2.0#1...
+libjpeg-turbo:x64-windows-static-md@3.2.0#1 package ABI: d21322889178b053167d3f836dfdd6293724ee162883daeeac4d56003e898e1e
+Elapsed time to handle libjpeg-turbo:x64-windows-static-md: 10.3 ms
+Installing 9/16 jasper:x64-windows-static-md@4.2.9...
+jasper:x64-windows-static-md@4.2.9 package ABI: 1f1607ea9d8de816550f499eb0c108dddce88cd8e06e602e444a84fba24f60fb
+Elapsed time to handle jasper:x64-windows-static-md: 11.2 ms
+Installing 10/16 libraw:x64-windows-static-md@0.22.3...
+libraw:x64-windows-static-md@0.22.3 package ABI: e9e50a2e1fe0e0f23804f2c876012b44665507697849b7366f9e9ec0ec283ca1
+Elapsed time to handle libraw:x64-windows-static-md: 27.3 ms
+Installing 11/16 libwebp[core,libwebpmux,nearlossless,simd,unicode]:x64-windows-static-md@1.6.0#3...
+libwebp[core,libwebpmux,nearlossless,simd,unicode]:x64-windows-static-md@1.6.0#3 package ABI: 32035ff34c9d6ff24ae8d02da32cf726586f9a2f463adee76ca131fbede70b38
+Elapsed time to handle libwebp:x64-windows-static-md: 12.7 ms
+Installing 12/16 liblzma:x64-windows-static-md@5.8.4...
+liblzma:x64-windows-static-md@5.8.4 package ABI: f4898195549bd344918e8bed80a7ddbf3567466e6be3eb191564f136d4518d0e
+Elapsed time to handle liblzma:x64-windows-static-md: 13.2 ms
+Installing 13/16 tiff[core,jpeg,lzma,zip]:x64-windows-static-md@4.7.2...
+tiff[core,jpeg,lzma,zip]:x64-windows-static-md@4.7.2 package ABI: 497599d1c4e5e3c381b02bb2991a4d06d544d2ea4927e5deb1211e2582d4fdb8
+Elapsed time to handle tiff:x64-windows-static-md: 8.22 ms
+Installing 14/16 libpng:x64-windows-static-md@1.6.59...
+libpng:x64-windows-static-md@1.6.59 package ABI: 77296817e43768dee541c2a3c6e3167af572d316b1faaa4b9a271812659a4df6
+Elapsed time to handle libpng:x64-windows-static-md: 8.56 ms
+Installing 15/16 vcpkg-get-python-packages:x64-windows@2025-04-05#1...
+vcpkg-get-python-packages:x64-windows@2025-04-05#1 package ABI: c92a7d9d73ca22f65a8f489fa125fed3c8fbfa9daf781231e82bf8d50cc4b4bd
+Elapsed time to handle vcpkg-get-python-packages:x64-windows: 3.23 ms
+Installing 16/16 opencv4[core,jpeg,png,tiff,webp]:x64-windows-static-md@4.14.0...
+opencv4[core,jpeg,png,tiff,webp]:x64-windows-static-md@4.14.0 package ABI: 8ad1b5bf28b9e887ab6765a74285b81b9ce32cd77c3ee163eccfb1d39ce8cdc7
+Elapsed time to handle opencv4:x64-windows-static-md: 159 ms
+Installed contents are licensed to you by owners. Microsoft is not responsible for, nor does it grant any licenses to, third-party packages.
+Some packages did not declare an SPDX license. Check the `copyright` file for each package for more information about their licensing.
+Packages installed in this vcpkg installation declare the following licenses:
+(LGPL-2.1-only OR CDDL-1.0)
+0BSD
+Apache-2.0
+BSD-2-Clause
+BSD-3-Clause
+IJG
+MIT
+Zlib
+libpng-2.0
+libtiff
+libraw provides CMake targets:
+
+    find_package(libraw CONFIG REQUIRED)
+    # non-thread-safe
+    target_link_libraries(main PRIVATE libraw::raw)
+    # thread-safe
+    target_link_libraries(main PRIVATE libraw::raw_r)
+
+libraw provides pkg-config modules:
+
+  # Raw image decoder library (non-thread-safe)
+  libraw
+
+  # Raw image decoder library (thread-safe)
+  libraw_r
+
+opencv4 is compatible with built-in CMake variables. In case of multiple OpenCV version installed, set OpenCV_ROOT *before* the find_package call:
+
+    set(OpenCV_ROOT "${VCPKG_INSTALLED_DIR}/x64-windows-static-md/share/opencv4")
+    find_package(OpenCV REQUIRED)
+
+All requested installations completed successfully in: 293 ms

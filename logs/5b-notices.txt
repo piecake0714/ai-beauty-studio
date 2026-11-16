@@ -1,0 +1,1 @@
+wrote apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.txt (Runtime libraries: 9, Rust libraries: 62, C++ libraries: 11, JavaScript libraries: 8)

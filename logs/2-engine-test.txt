@@ -1,0 +1,61 @@
+UpdateCTestConfiguration  from :D:/a/ai-beauty-studio/ai-beauty-studio/build/engine/DartConfiguration.tcl
+Parse Config file:D:/a/ai-beauty-studio/ai-beauty-studio/build/engine/DartConfiguration.tcl
+Test project D:/a/ai-beauty-studio/ai-beauty-studio/build/engine
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 1
+    Start 1: engine
+
+1: Test command: D:\a\ai-beauty-studio\ai-beauty-studio\build\engine\bin\Release\aibs_engine_tests.exe
+1: Working Directory: D:/a/ai-beauty-studio/ai-beauty-studio/build/engine
+1: Test timeout computed to be: 1500
+1: info: DNG red minus blue: left 177.0, right -255.0
+1: [ERROR:0@0.016] global grfmt_tiff.cpp:116 cv::TIFF_Error TIFFFetchDirectory: : Can not read TIFF directory
+1: [ERROR:0@0.016] global grfmt_tiff.cpp:116 cv::TIFF_Error TIFFReadDirectory: Failed to read directory at offset 8
+1: [1;31m2026-11-16 02:10:25.8173724 [E:onnxruntime:, sequential_executor.cc:572 onnxruntime::ExecuteKernel] Non-zero status code returned while running Conv node. Name:'luma_nchwc' Status Message: Input channels C is not equal to kernel channels * group. C: 1 kernel channels: 3 group: 1[m
+1: timing: render fit 1600x1200 took 16.5 ms
+1: timing: render 100% 1920x1080 took 18.0 ms
+1: timing: render 800% 1920x1080 took 11.8 ms
+1: timing: render 6% 480x360 took 2.0 ms
+1: timing: render 100% 1920x1080 with every adjustment took 85.7 ms
+1: timing: open 48 MP JPEG took 75.7 ms
+1: info: GPU "Microsoft Basic Render Driver" vendor 0x1414 software=0 dedicated=0 MB
+1: info: GPU "Microsoft Basic Render Driver" vendor 0x1414 software=1 dedicated=0 MB
+1: timing: luma 7x5 on CPU took 0.3 ms (max error 5.5e-08)
+1: timing: luma 1024x1024 on CPU took 14.8 ms (max error 7.3e-08)
+1: info: ONNX Runtime 1.24.4
+1: info: DirectML requested, CPU used; DirectML unavailable: E:\_work\1\s\onnxruntime\core\providers\dml\dml_provider_factory.cc(520)\onnxruntime.dll!00007FFB3991B160: (caller: 00007FFB3991B46A) Exception(1) tid(2160) C0262002 Specified display adapter handle is invalid.
+1: 
+1: timing: luma 7x5 on CPU took 0.1 ms (max error 5.5e-08)
+1: timing: luma 1024x1024 on CPU took 12.1 ms (max error 7.3e-08)
+1: info: cheek variation 7.7 -> 4.5, fine grain 2.77 -> 2.00
+1: info: drawn test face, 0 face(s) detected
+1: info: auto exposure dark +2.00, bright -1.60, normal -0.20; bluish temperature +40
+1: info: under-eye brightness 130.0 -> 151.7
+1: info: eye contrast 67.5 -> 82.2
+1: info: teeth Cb 100.0 -> 124.0, Y 200.0 -> 214.0
+1: info: blemish 127.0 -> 161.3 (skin 177.4)
+1: info: healed spot centre 134 (was 40)
+1: info: noise grain 10.4 -> 4.2, colour 16.2 -> 1.4
+1: info: background blur, neighbour differences 1040 -> 0
+1: info: soft edge blue at x=61: naive 229, with subject colour 212
+1: info: segmentation on CPU 9109 ms, coverage 0.189 (drawn ball 0.189), IoU 1.000
+1: info: edge detail alpha x98 166 -> 193, x101 89 -> 62
+1: info: softbox near 133, far 110 (was 110)
+1: info: reflector dark x3.75, bright x1.04
+1: info: dome lit from the left: left side 161, right side 113 (flat light 130 / 122, original 120)
+1: info: depth jump, largest rim beyond the neighbours: 0
+1: info: drawn ball lit from the right with estimated shape: right edge x1.43, left edge x0.94
+1: info: JPEG quality 95 mean error 0.50, 686 bytes (quality 20: 361 bytes)
+1: info: soft brush gain at centre 34, near the edge 11
+1: info: stroke at 4x zoom vs whole render, largest difference 13, mean 1.51
+1: all engine tests passed (engine 0.1.0)
+1/1 Test #1: engine ...........................   Passed   19.26 sec
+
+100% tests passed out of 1
+
+Total Test time (real) =  19.29 sec

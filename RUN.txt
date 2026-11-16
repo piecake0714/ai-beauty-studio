@@ -1,0 +1,14 @@
+commit: 144e8b9f7836393e23dc7cb2feda3266e62ec714
+branch: v2.0.1
+run:    https://github.com/piecake0714/ai-beauty-studio/actions/runs/43790307053
+job:    success
+ai_packages:    success
+models:         success
+engine_build:   success
+engine_test:    success
+npm_install:    success
+frontend_test:  success
+frontend_build: success
+notices:        success
+rust_test:      success
+installer:      success

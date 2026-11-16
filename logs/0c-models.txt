@@ -1,0 +1,20 @@
+face-yunet: already present
+face-yunet: sha256 8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4
+face-yunet: license text 1085 bytes, sha256 c83b8120c50ccbd4c4f96edf53141bdd566ebb8f8e9227e415326aa1b1aba958
+face-yunet: license text begins: MIT License / 
+background-birefnet-lite: already present
+background-birefnet-lite: sha256 5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333
+background-birefnet-lite: license text 1066 bytes, sha256 92a7089e0915fc32bc40067560b398f1e6a7a5958abd7d04eda393629a5acefb
+background-birefnet-lite: license text begins: MIT License / 
+depth-anything-v2-small: already present
+depth-anything-v2-small: sha256 afb6a5c28f3b6bf1618c6e43f02073ef9dfdc70e937502d51603e57b0a1df10c
+depth-anything-v2-small: license text 11357 bytes, sha256 c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4
+depth-anything-v2-small: license text begins: Apache License / Version 2.0, January 2004
+inpaint-lama: already present
+inpaint-lama: sha256 1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6
+inpaint-lama: license text 11348 bytes, sha256 4ceeeac5a802e86c413c22b16cce8e9a22027b0250c97e6f8ac97c14cf0542c0
+inpaint-lama: license text begins: Apache License / Version 2.0, January 2004
+upscale-realesrgan-x2: already present
+upscale-realesrgan-x2: sha256 7115ba92e8a1bfa63d68558ef006ef3d91273a068d321b1439f8bb1c9179002c
+upscale-realesrgan-x2: license text 1519 bytes, sha256 4a699ec4863d96a91fc265948a0c90033f7e8735d515524dcf3444736406e0c2
+upscale-realesrgan-x2: license text begins: BSD 3-Clause License / 

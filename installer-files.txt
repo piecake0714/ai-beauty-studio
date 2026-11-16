@@ -1,0 +1,4 @@
+total 513416
+drwxr-xr-x 1 runneradmin 197121         0 Nov 16 02:19 .
+drwxr-xr-x 1 runneradmin 197121         0 Nov 16 02:14 ..
+-rwxr-xr-x 1 runneradmin 197121 525737637 Nov 16 02:19 AI Beauty Studio_2.0.1_x64-setup.exe

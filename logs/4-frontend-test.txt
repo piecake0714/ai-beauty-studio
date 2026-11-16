@@ -1,0 +1,20 @@
+
+> ai-beauty-studio-desktop@2.0.1 test
+> vitest run
+
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mD:/a/ai-beauty-studio/ai-beauty-studio/apps/desktop[39m
+
+ [32m✓[39m src/view.test.ts [2m([22m[2m12 tests[22m[2m)[22m[90m 9[2mms[22m[39m
+ [32m✓[39m src/adjustments.test.ts [2m([22m[2m14 tests[22m[2m)[22m[90m 13[2mms[22m[39m
+ [32m✓[39m src/i18n.test.ts [2m([22m[2m4 tests[22m[2m)[22m[90m 18[2mms[22m[39m
+ [32m✓[39m src/store.test.ts [2m([22m[2m47 tests[22m[2m)[22m[33m 382[2mms[22m[39m
+ [32m✓[39m src/format.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 129[2mms[22m[39m
+ [32m✓[39m src/frame.test.ts [2m([22m[2m4 tests[22m[2m)[22m[90m 6[2mms[22m[39m
+ [32m✓[39m src/jobs.test.ts [2m([22m[2m4 tests[22m[2m)[22m[90m 6[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m7 passed[39m[22m[90m (7)[39m
+[2m      Tests [22m [1m[32m90 passed[39m[22m[90m (90)[39m
+[2m   Start at [22m 02:10:51
+[2m   Duration [22m 1.27s[2m (transform 379ms, setup 0ms, collect 624ms, tests 563ms, environment 1ms, prepare 709ms)[22m
+
