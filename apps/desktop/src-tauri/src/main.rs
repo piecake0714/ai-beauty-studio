@@ -1352,7 +1352,7 @@ fn main() {
                 detector: Mutex::new(None),
                 background_model: Arc::new(ModelSlot::new(separation::BACKGROUND_MODEL)),
                 depth_model: Arc::new(ModelSlot::new(separation::DEPTH_MODEL)),
-                inpaint_model: Arc::new(ModelSlot::new(inpaint::INPAINT_MODEL)),
+                inpaint_model: Arc::new(ModelSlot::cpu_only(inpaint::INPAINT_MODEL)),
                 upscale_model: Arc::new(ModelSlot::new(application_core::upscale::UPSCALE_MODEL)),
                 recovery,
                 launch_path: Mutex::new(launch_path_from(std::env::args().skip(1))),
